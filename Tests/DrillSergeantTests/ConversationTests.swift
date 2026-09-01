@@ -34,10 +34,19 @@ final class ConversationTests: XCTestCase {
 
     func testHumanReplyAndReset() {
         let conversation = Conversation()
-        conversation.recordHumanReply("I am reading the docs")
+        let reply = "I am reading the docs"
+        conversation.recordHumanReply(reply)
 
-        XCTAssertEqual(conversation.lastUserMessage, "I am reading the docs")
-        XCTAssertEqual(conversation.turns.last?.content, "I am reading the docs")
+        var modelTurns = conversation.turns
+        modelTurns[modelTurns.count - 1] = OllamaMessage(
+            role: "user",
+            content: "The user replied to you: \"\(reply)\"",
+            images: nil
+        )
+
+        XCTAssertEqual(modelTurns.last?.content, "The user replied to you: \"\(reply)\"")
+        XCTAssertEqual(conversation.lastUserMessage, reply)
+        XCTAssertEqual(conversation.turns.last?.content, reply)
 
         conversation.reset()
         XCTAssertNil(conversation.lastUserMessage)

@@ -251,12 +251,18 @@ actor OllamaClient {
     var model: String
     func isReachable() async -> Bool                     // GET /api/tags succeeds
     func hasModel() async throws -> Bool                 // model name in /api/tags (match with or without ":latest")
-    /// POST /api/chat, stream:false, format: Decision.jsonSchema, options: {temperature: 0.2, num_ctx: 8192}, keep_alive: "30m"
+    /// POST /api/chat, stream:false, think:false, format: Decision.jsonSchema,
+    /// options: {temperature: 0.2, num_ctx: 8192, num_predict: 200}, keep_alive: "30m"
     func decide(messages: [OllamaMessage]) async throws -> Decision
 }
 ```
 
-Timeout: 120s per request. Log request size and latency via `Log`.
+Timeout: 120s per request. `think:false` avoids long reasoning before the constrained JSON, and
+`num_predict:200` caps runaway output. Decode both `message.content` and optional
+`message.thinking`: use `content` when it contains `{`, otherwise parse `thinking` (some Ollama
+model templates return the final JSON there when thinking is disabled). If neither produces a
+valid decision, throw `badResponse`. Log request size, latency, the response field used, and
+top-level `eval_count` / `done_reason` when present via `Log`.
 
 ### 4.3 Conversation
 

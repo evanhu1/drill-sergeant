@@ -77,8 +77,13 @@ actor OllamaClient {
             "model": model,
             "messages": messageObjects,
             "stream": false,
+            "think": false,
             "format": Decision.jsonSchema,
-            "options": ["temperature": 0.2, "num_ctx": 8192],
+            "options": [
+                "temperature": 0.2,
+                "num_ctx": 8192,
+                "num_predict": 200,
+            ],
             "keep_alive": "30m",
         ]
         let body: Data
@@ -107,16 +112,52 @@ actor OllamaClient {
         }
 
         struct ChatResponse: Decodable {
-            struct Message: Decodable { let content: String }
+            struct Message: Decodable {
+                let content: String
+                let thinking: String?
+            }
+
             let message: Message
+            let evalCount: Int?
+            let doneReason: String?
+
+            enum CodingKeys: String, CodingKey {
+                case message
+                case evalCount = "eval_count"
+                case doneReason = "done_reason"
+            }
         }
         guard let chat = try? JSONDecoder().decode(ChatResponse.self, from: data) else {
             throw OllamaError.badResponse("Invalid response from /api/chat")
         }
+
+        let decisionText: String
+        let responseField: String
+        if chat.message.content.contains("{") {
+            decisionText = chat.message.content
+            responseField = "content"
+        } else if let thinking = chat.message.thinking {
+            decisionText = thinking
+            responseField = "thinking"
+        } else {
+            throw OllamaError.badResponse("No decision in message.content or message.thinking")
+        }
+
+        var details = ["field=message.\(responseField)"]
+        if let evalCount = chat.evalCount {
+            details.append("eval_count=\(evalCount)")
+        }
+        if let doneReason = chat.doneReason {
+            details.append("done_reason=\(doneReason)")
+        }
+        Log.info("Ollama decision source: \(details.joined(separator: ", "))")
+
         do {
-            return try Decision.parse(chat.message.content)
+            return try Decision.parse(decisionText)
         } catch {
-            throw OllamaError.badResponse("Invalid decision: \(error.localizedDescription)")
+            throw OllamaError.badResponse(
+                "Invalid decision in message.\(responseField): \(error.localizedDescription)"
+            )
         }
     }
 

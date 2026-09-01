@@ -30,8 +30,11 @@ final class OllamaClientTests: XCTestCase {
                 JSONSerialization.jsonObject(with: body) as? [String: Any]
             )
             XCTAssertEqual(object["stream"] as? Bool, false)
+            XCTAssertEqual(object["think"] as? Bool, false)
             XCTAssertEqual(object["keep_alive"] as? String, "30m")
             XCTAssertNotNil(object["format"] as? [String: Any])
+            let options = try XCTUnwrap(object["options"] as? [String: Any])
+            XCTAssertEqual(options["num_predict"] as? Int, 200)
             return Self.response(
                 request: request,
                 body: #"{"message":{"content":"{\"tool\":\"set_angry\",\"message\":\"Close it.\"}"}}"#
@@ -46,6 +49,23 @@ final class OllamaClientTests: XCTestCase {
         XCTAssertEqual(
             decision,
             Decision(tool: .set_angry, snoozeMinutes: nil, message: "Close it.")
+        )
+    }
+
+    func testDecideFallsBackToThinkingField() async throws {
+        MockURLProtocol.handler = { request in
+            Self.response(
+                request: request,
+                body: #"{"message":{"content":"","thinking":"{\"tool\":\"set_idle\",\"message\":\"Good.\"}"},"eval_count":18,"done_reason":"stop"}"#
+            )
+        }
+        let client = makeClient()
+
+        let decision = try await client.decide(messages: [])
+
+        XCTAssertEqual(
+            decision,
+            Decision(tool: .set_idle, snoozeMinutes: nil, message: "Good.")
         )
     }
 

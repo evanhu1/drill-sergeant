@@ -13,6 +13,8 @@ final class AppCoordinator: SchedulerDelegate {
     private var conversation: Conversation?
     private var cursorTracker: CursorTracker?
     private var onboarding: OnboardingFlow?
+    private var pendingWork: Task<Void, Never>?
+    private var pendingReplyCount = 0
     private var hasStarted = false
 
     init() {
@@ -141,15 +143,20 @@ final class AppCoordinator: SchedulerDelegate {
         let wasOnboarding = onboarding != nil
         onboarding?.schedulerDidChange(to: state)
 
-        if old == .happy, state == .idle, !wasOnboarding, chat?.isReplying == false {
+        if old == .happy,
+            state == .idle,
+            !wasOnboarding,
+            pendingReplyCount == 0,
+            chat?.isReplying == false
+        {
             chat?.hide()
         }
     }
 
     func schedulerRequestsCheck(_ scheduler: Scheduler, reason: CheckReason) {
-        Task { [weak self, weak scheduler] in
+        enqueueModelWork { [weak self, weak scheduler] in
             guard let self, let scheduler else { return }
-            let decision = await runCheck(reason)
+            let decision = await self.runCheck(reason)
             scheduler.apply(decision)
         }
     }
@@ -167,7 +174,7 @@ final class AppCoordinator: SchedulerDelegate {
             relaunch: { [weak self] in self?.relaunch() },
             runCheck: { [weak self] reason in
                 guard let self else { return nil }
-                return await self.runCheck(reason)
+                return await self.enqueueCheck(reason)
             }
         )
         onboarding.onFinished = { [weak self, weak onboarding] in
@@ -188,8 +195,33 @@ final class AppCoordinator: SchedulerDelegate {
     }
 
     private func submitReply(_ text: String) {
-        Task { [weak self] in
+        pendingReplyCount += 1
+        chat?.onTap = nil
+        chat?.show("…", autoHide: false)
+        enqueueModelWork { [weak self] in
             await self?.runReply(text)
+        }
+    }
+
+    private func enqueueModelWork(
+        _ work: @escaping @MainActor () async -> Void
+    ) {
+        let previous = pendingWork
+        pendingWork = Task { @MainActor in
+            _ = await previous?.value
+            await work()
+        }
+    }
+
+    private func enqueueCheck(_ reason: CheckReason) async -> Decision? {
+        await withCheckedContinuation { continuation in
+            enqueueModelWork { [weak self] in
+                guard let self else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                continuation.resume(returning: await self.runCheck(reason))
+            }
         }
     }
 
@@ -209,15 +241,27 @@ final class AppCoordinator: SchedulerDelegate {
             )
         } catch ScreenCaptureError.permissionDenied {
             Log.warn("Screen capture permission is not granted")
-            presentPermissionRequest()
+            if pendingReplyCount == 0 {
+                presentPermissionRequest()
+            }
             return idleDecision
         } catch let error as ScreenCaptureError {
             Log.error("Screen capture failed: \(description(of: error))")
-            chat?.show("I couldn't capture your screen. I'll try again later.", autoHide: true)
+            if pendingReplyCount == 0 {
+                chat?.show(
+                    "I couldn't capture your screen. I'll try again later.",
+                    autoHide: true
+                )
+            }
             return idleDecision
         } catch {
             Log.error("Screen capture failed: \(error.localizedDescription)")
-            chat?.show("I couldn't capture your screen. I'll try again later.", autoHide: true)
+            if pendingReplyCount == 0 {
+                chat?.show(
+                    "I couldn't capture your screen. I'll try again later.",
+                    autoHide: true
+                )
+            }
             return idleDecision
         }
 
@@ -228,14 +272,22 @@ final class AppCoordinator: SchedulerDelegate {
         conversation.appendUser(prompt, image: screenshot.base64)
 
         let messages = modelMessages(conversation: conversation)
-        let decision = await requestDecision(messages: messages, ollama: ollama)
-        handle(decision: decision, conversation: conversation)
-        return decision
+        let outcome = await requestDecision(messages: messages, ollama: ollama)
+        handle(
+            decision: outcome.decision,
+            conversation: conversation,
+            presentMessage: pendingReplyCount == 0
+        )
+        if let errorMessage = outcome.errorMessage, pendingReplyCount == 0 {
+            showOllamaError(errorMessage)
+        }
+        return outcome.decision
     }
 
     private func runReply(_ text: String) async {
         guard let scheduler, let conversation, let ollama else {
             Log.error("Reply received before coordinator finished starting")
+            finishReply(with: nil)
             return
         }
 
@@ -250,43 +302,84 @@ final class AppCoordinator: SchedulerDelegate {
 
         Log.info("Sending user reply to Ollama; state=\(scheduler.state.rawValue)")
         let messages = [systemMessage()] + turns
-        let decision = await requestDecision(messages: messages, ollama: ollama)
-        handle(decision: decision, conversation: conversation)
-        scheduler.apply(decision)
+        let outcome = await requestDecision(messages: messages, ollama: ollama)
+        handle(
+            decision: outcome.decision,
+            conversation: conversation,
+            presentMessage: false
+        )
+        scheduler.apply(outcome.decision)
+        finishReply(with: outcome)
     }
 
     private func requestDecision(
         messages: [OllamaMessage],
         ollama: OllamaClient
-    ) async -> Decision {
+    ) async -> DecisionOutcome {
         do {
-            return try await ollama.decide(messages: messages)
+            return DecisionOutcome(
+                decision: try await ollama.decide(messages: messages),
+                errorMessage: nil
+            )
         } catch let error as OllamaError {
             Log.error("Ollama decision failed: \(description(of: error))")
-            chat?.onTap = nil
-            chat?.show(
-                "Can't reach Ollama. Make sure it's running and \(settings.model) is installed.",
-                autoHide: true
+            return DecisionOutcome(
+                decision: idleDecision,
+                errorMessage: "Can't reach Ollama. Make sure it's running and "
+                    + "\(settings.model) is installed."
             )
-            return idleDecision
         } catch {
             Log.error("Ollama decision failed: \(error.localizedDescription)")
-            chat?.onTap = nil
-            chat?.show("Can't reach Ollama. Make sure it's running.", autoHide: true)
-            return idleDecision
+            return DecisionOutcome(
+                decision: idleDecision,
+                errorMessage: "Can't reach Ollama. Make sure it's running."
+            )
         }
     }
 
-    private func handle(decision: Decision, conversation: Conversation) {
+    private func handle(
+        decision: Decision,
+        conversation: Conversation,
+        presentMessage: Bool = true
+    ) {
         conversation.appendAssistant(decision)
         Log.info(
             "Decision: tool=\(decision.tool.rawValue), "
                 + "snooze=\(decision.snoozeMinutes.map(String.init) ?? "none")"
         )
 
-        guard !decision.message.isEmpty else { return }
+        guard presentMessage, !decision.message.isEmpty else { return }
         chat?.onTap = nil
         chat?.show(decision.message, autoHide: decision.tool != .set_angry)
+    }
+
+    private func finishReply(with outcome: DecisionOutcome?) {
+        pendingReplyCount = max(0, pendingReplyCount - 1)
+        guard pendingReplyCount == 0 else {
+            chat?.show("…", autoHide: false)
+            return
+        }
+
+        guard let outcome else {
+            chat?.hide()
+            return
+        }
+        if let errorMessage = outcome.errorMessage {
+            showOllamaError(errorMessage)
+        } else if outcome.decision.message.isEmpty {
+            chat?.hide()
+        } else {
+            chat?.onTap = nil
+            chat?.show(
+                outcome.decision.message,
+                autoHide: outcome.decision.tool != .set_angry
+            )
+        }
+    }
+
+    private func showOllamaError(_ message: String) {
+        chat?.onTap = nil
+        chat?.show(message, autoHide: true)
     }
 
     private func checkContext(
@@ -340,6 +433,11 @@ final class AppCoordinator: SchedulerDelegate {
 
     private var idleDecision: Decision {
         Decision(tool: .set_idle, snoozeMinutes: nil, message: "")
+    }
+
+    private struct DecisionOutcome {
+        let decision: Decision
+        let errorMessage: String?
     }
 
     private func description(of reason: CheckReason) -> String {
