@@ -30,6 +30,8 @@ final class BubbleWindow: NSPanel, ChatPresenter {
         didSet { model.onTap = onTap }
     }
 
+    var isReplying: Bool { model.isInputOpen }
+
     override var canBecomeKey: Bool { true }
 
     init(
