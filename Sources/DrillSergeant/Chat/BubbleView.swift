@@ -85,7 +85,7 @@ struct BubbleView: View {
             Text(model.text)
                 .font(.system(size: 13))
                 .foregroundStyle(.white)
-                .lineLimit(4)
+                .lineLimit(10)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
 
