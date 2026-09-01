@@ -1,0 +1,619 @@
+# Drill Sergeant — V1 Specification
+
+> Tagline: **Drill sergeant that watches your screen and shouts at you when off task.**
+
+A macOS menu-bar-less companion that lives in the MacBook notch. It has expressive eyes.
+Every 10 minutes it screenshots the screen, reads the active window, and asks a **local**
+vision LLM (Ollama) whether the user is on task. If not, it gets angry and shouts via a
+message bubble until the user closes the distraction. Nothing leaves the machine.
+
+This document is the single source of truth. Every module lists its **public interface**.
+Implement exactly these signatures so that modules built in parallel fit together.
+
+---
+
+## 1. Platform and stack
+
+| Item | Decision |
+|---|---|
+| OS | macOS 14.0+ (Sonoma), Apple Silicon |
+| Language | Swift 5.9+ (`swift-tools-version: 5.9`), Swift Package Manager, **no third-party deps** |
+| UI | AppKit windows (`NSPanel`) hosting SwiftUI views (`NSHostingView`) |
+| Concurrency | Swift Concurrency (`async/await`, `@MainActor`) |
+| LLM | Ollama HTTP API at `http://127.0.0.1:11434`, default model `qwen3-vl:8b` |
+| Screenshot | ScreenCaptureKit (`SCScreenshotManager`) |
+| Persistence | `UserDefaults` (suite: standard), key prefix `ds.` |
+| Bundle ID | `com.evanhu.drillsergeant` |
+| App name | `Drill Sergeant`, executable `DrillSergeant` |
+| Dock icon | none (`LSUIElement = true`) |
+| Tests | XCTest, target `DrillSergeantTests`, run with `swift test` |
+
+Package layout:
+
+```
+Package.swift
+Sources/DrillSergeant/
+  App/            main.swift, AppDelegate.swift, AppCoordinator.swift
+  Notch/          NotchGeometry.swift, NotchWindow.swift, EyesView.swift, CursorTracker.swift
+  Companion/      CompanionState.swift, Scheduler.swift, Clock.swift
+  Capture/        ScreenCapture.swift, ActiveWindowInfo.swift, ScreenPermission.swift
+  LLM/            OllamaClient.swift, Decision.swift, PromptBuilder.swift, Conversation.swift
+  Chat/           BubbleWindow.swift, BubbleView.swift, ChatPresenter.swift
+  Onboarding/     OnboardingFlow.swift
+  Settings/       Settings.swift
+  Util/           Log.swift
+Tests/DrillSergeantTests/
+Scripts/          bundle.sh, Info.plist, run.sh
+install.sh
+README.md
+docs/SPEC.md
+```
+
+Because the executable target contains all code, tests use `@testable import DrillSergeant`.
+To make the executable target testable, keep `main.swift` minimal (it only calls
+`AppMain.run()`), and keep all logic in other files.
+
+---
+
+## 2. Companion state machine
+
+```swift
+enum CompanionState: String, Codable, Equatable {
+    case idle      // eyes relaxed, occasional blink
+    case watching  // eyes follow the cursor; pre-roll before a check and during processing
+    case angry     // caught off task; eyes follow cursor with angry brows; polls every 30s
+    case happy     // shown for 30s after leaving angry; then idle
+}
+```
+
+Transitions (Scheduler drives these):
+
+| From | Event | To |
+|---|---|---|
+| idle | 60s before next check | watching |
+| watching | capture + LLM done, decision `set_idle` | idle (next check in `intervalMinutes`) |
+| watching | decision `set_angry` | angry |
+| watching | decision `snooze(n)` | idle (next check in `n` minutes) |
+| angry | 30s poll, decision `set_angry` | angry (stay) |
+| angry | 30s poll or reply, decision `set_idle` | happy |
+| angry | decision `snooze(n)` | happy (then idle, next check in `n` minutes) |
+| happy | 30s elapsed | idle |
+| any | user reply produces a decision | same rules as the row for the current state (idle/happy treated like watching) |
+| any | "Check now" menu item | watching (no pre-roll), immediate capture |
+
+Rules:
+- `intervalMinutes` default 10. The timer always resets after a decision.
+- Entering `happy` from `angry` also resets the timer to `intervalMinutes` (or the snooze length).
+- The 60s pre-roll `watching` state is skipped when the remaining time is already under 60s.
+- The angry poll: every 30s capture + LLM. It never enters `watching`; eyes already track the cursor.
+
+### 2.1 Scheduler interface
+
+Testable, injectable clock, no UI. Lives on the main actor.
+
+```swift
+protocol Clock {
+    var now: Date { get }
+    /// Schedule `block` after `seconds`. Returns a cancel token.
+    func after(_ seconds: TimeInterval, _ block: @escaping @MainActor () -> Void) -> CancelToken
+}
+final class CancelToken { func cancel() }
+final class SystemClock: Clock   // uses Timer/DispatchQueue.main
+final class TestClock: Clock     // manual `advance(by:)`, used by tests
+
+@MainActor
+protocol SchedulerDelegate: AnyObject {
+    /// Called on every state change.
+    func scheduler(_ s: Scheduler, didChange state: CompanionState, from old: CompanionState)
+    /// Ask the delegate to run a check (capture + LLM). The delegate calls `s.apply(decision)`.
+    func schedulerRequestsCheck(_ s: Scheduler, reason: CheckReason)
+}
+
+enum CheckReason { case scheduled, angryPoll, manual, onboarding }
+
+@MainActor
+final class Scheduler {
+    init(clock: Clock, intervalMinutes: Int = 10, preRollSeconds: TimeInterval = 60,
+         angryPollSeconds: TimeInterval = 30, happySeconds: TimeInterval = 30)
+    weak var delegate: SchedulerDelegate?
+    private(set) var state: CompanionState          // starts .idle
+    private(set) var previousState: CompanionState  // starts .idle
+    private(set) var stateChangedAt: Date
+    private(set) var nextCheckAt: Date?
+    var intervalMinutes: Int { get set }            // setting it reschedules from now
+
+    func start()                 // schedules the first check `intervalMinutes` from now
+    func stop()                  // cancels all timers; state → idle
+    func checkNow()              // manual: state → watching, immediate check
+    func apply(_ decision: Decision) // applies the transition table above
+    /// Onboarding uses this to force watching without a timer.
+    func enterWatching()
+}
+```
+
+A check is "in flight" from `schedulerRequestsCheck` until `apply`. If another trigger fires
+while in flight, it is ignored.
+
+---
+
+## 3. Capture
+
+### 3.1 ScreenPermission
+
+```swift
+enum ScreenPermission {
+    static func isGranted() -> Bool          // CGPreflightScreenCaptureAccess()
+    static func request() -> Bool            // CGRequestScreenCaptureAccess(); shows OS prompt only the first time
+    static func openSystemSettings()         // x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture
+}
+```
+
+Important macOS behavior: after the user grants Screen Recording, **the app must relaunch**
+before capture works. See `AppCoordinator.relaunch()`.
+
+### 3.2 ScreenCapture
+
+```swift
+struct Screenshot {
+    let jpegData: Data       // downscaled, longest edge ≤ 1280px, JPEG quality 0.7
+    let width: Int
+    let height: Int
+    let capturedAt: Date
+    var base64: String { jpegData.base64EncodedString() }
+}
+
+enum ScreenCaptureError: Error { case permissionDenied, noDisplay, failed(String) }
+
+enum ScreenCapture {
+    /// Captures the display that currently contains the mouse cursor (fallback: main display).
+    static func capture() async throws -> Screenshot
+}
+```
+
+Use `SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)`, pick the
+`SCDisplay` under `NSEvent.mouseLocation`, build `SCContentFilter(display:excludingWindows:)`
+excluding this app's own windows, and call `SCScreenshotManager.captureImage`. Set
+`SCStreamConfiguration.width/height` to the downscaled size so we never hold a full-res image.
+
+### 3.3 ActiveWindowInfo
+
+```swift
+struct ActiveWindowInfo: Equatable {
+    let appName: String          // e.g. "Google Chrome"
+    let bundleID: String?        // e.g. "com.google.Chrome"
+    let windowTitle: String?     // e.g. "lofi hip hop radio - YouTube"
+    var summary: String          // "Google Chrome — “lofi hip hop radio - YouTube”" (or app name only)
+    var looksLikeYouTube: Bool   // title or bundle contains "youtube" (case-insensitive)
+}
+
+enum ActiveWindowInspector {
+    static func current() -> ActiveWindowInfo
+}
+```
+
+Use `NSWorkspace.shared.frontmostApplication` for app name/pid/bundle, then
+`CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)`,
+filter `kCGWindowOwnerPID == pid` and `kCGWindowLayer == 0`, take the first window with a
+non-empty `kCGWindowName`. Titles are only visible with Screen Recording permission; if
+absent, `windowTitle` is nil.
+
+---
+
+## 4. LLM
+
+### 4.1 Decision (the tool call)
+
+The model "calls a tool" by emitting one JSON object that matches this schema. Ollama's
+structured output (`format` = JSON schema) enforces the shape.
+
+```swift
+enum Tool: String, Codable { case set_idle, snooze, set_angry }
+
+struct Decision: Codable, Equatable {
+    let tool: Tool
+    let snoozeMinutes: Int?      // JSON key "snooze_minutes"; required when tool == .snooze; clamp 1...120
+    let message: String          // what the sergeant says; "" means stay silent (no bubble)
+
+    static let jsonSchema: [String: Any]   // see below
+    static func parse(_ text: String) throws -> Decision   // tolerant: strips ``` fences, finds first {...}
+}
+```
+
+JSON schema sent to Ollama:
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "tool": { "type": "string", "enum": ["set_idle", "snooze", "set_angry"] },
+    "snooze_minutes": { "type": "integer", "minimum": 1, "maximum": 120 },
+    "message": { "type": "string" }
+  },
+  "required": ["tool", "message"]
+}
+```
+
+If `tool == snooze` and `snooze_minutes` is missing, default to 10.
+
+### 4.2 OllamaClient
+
+```swift
+struct OllamaMessage: Codable {
+    var role: String            // "system" | "user" | "assistant"
+    var content: String
+    var images: [String]?       // base64 JPEG, only on user messages
+}
+
+enum OllamaError: Error { case unreachable, modelMissing(String), badResponse(String), http(Int) }
+
+actor OllamaClient {
+    init(baseURL: URL = URL(string: "http://127.0.0.1:11434")!, model: String)
+    var model: String
+    func isReachable() async -> Bool                     // GET /api/tags succeeds
+    func hasModel() async throws -> Bool                 // model name in /api/tags (match with or without ":latest")
+    /// POST /api/chat, stream:false, format: Decision.jsonSchema, options: {temperature: 0.2, num_ctx: 8192}, keep_alive: "30m"
+    func decide(messages: [OllamaMessage]) async throws -> Decision
+}
+```
+
+Timeout: 120s per request. Log request size and latency via `Log`.
+
+### 4.3 Conversation
+
+Keeps a bounded history so replies have context.
+
+```swift
+@MainActor
+final class Conversation {
+    init(maxTurns: Int = 12)
+    private(set) var turns: [OllamaMessage]     // user/assistant only, images stripped from old turns
+    func appendUser(_ text: String, image: String?)   // image kept only on the most recent user turn
+    func appendAssistant(_ decision: Decision)  // stored as the raw JSON string
+    var lastUserMessage: String?                // most recent *typed* reply by the human (not check prompts)
+    func recordHumanReply(_ text: String)       // sets lastUserMessage and appends as a user turn
+    func reset()
+}
+```
+
+### 4.4 PromptBuilder
+
+```swift
+struct CheckContext {
+    let goal: String
+    let state: CompanionState
+    let previousState: CompanionState
+    let stateAge: TimeInterval           // seconds since state changed
+    let window: ActiveWindowInfo
+    let lastUserMessage: String?
+    let now: Date
+    let reason: CheckReason
+}
+
+enum PromptBuilder {
+    static func systemPrompt(goal: String) -> String
+    static func checkPrompt(_ ctx: CheckContext) -> String        // user turn text for a screenshot check
+    static func replyPrompt(_ text: String, ctx: CheckContext) -> String  // user turn text for a typed reply (no screenshot)
+}
+```
+
+System prompt (use this text, `{goal}` substituted):
+
+```
+You are Drill Sergeant, a no-nonsense accountability companion living in the user's Mac notch.
+The user works alone and asked you to keep them on task. Their stated goal:
+"{goal}"
+
+Every few minutes you receive a screenshot of their screen plus the active window's title.
+Decide whether they are ON TASK for that goal, then respond by calling exactly one tool:
+- set_idle: they are on task (or the screen is ambiguous but plausibly work). Message may be "" to stay quiet, or a short nod.
+- set_angry: they are clearly OFF TASK (YouTube, social media, news, shopping, games, idle scrolling, anything unrelated). Message is a short bark telling them to close it and get back to "{goal}".
+- snooze: they gave a legitimate reason for a break or a different activity, or asked for time. Set snooze_minutes (1-120). Message acknowledges it briefly.
+
+Rules:
+- Be blunt, loud, and short: at most 2 sentences, under 160 characters. Drill sergeant tone. No slurs, no insults about the person, no profanity beyond "damn"/"hell".
+- You are on their side. Tough love, never cruel.
+- Reading docs, code, email, chat with coworkers, research related to the goal = on task.
+- If the user replies with a reason, judge it fairly. Do not get talked into endless snoozes: after one snooze, be skeptical.
+- When you are currently angry and the distraction is gone, call set_idle with a brief approving message.
+- Output only the JSON tool call.
+```
+
+Check prompt (user turn):
+
+```
+Screenshot attached.
+Time: {h:mm a}
+Current state: {state} (for {stateAge, e.g. "2m 10s"})
+Previous state: {previousState}
+Active window: {window.summary}
+Last thing the user said to you: {lastUserMessage or "(nothing yet)"}
+Check reason: {scheduled | angry poll — is the distraction still open? | manual | onboarding test}
+Decide now.
+```
+
+Reply prompt (user turn, no image):
+
+```
+The user replied to you: "{text}"
+Time: {h:mm a}
+Current state: {state}
+Active window: {window.summary}
+Respond with one tool call.
+```
+
+---
+
+## 5. Notch UI
+
+### 5.1 NotchGeometry
+
+```swift
+struct NotchGeometry: Equatable {
+    let screenFrame: CGRect        // NSScreen.frame (AppKit coords, origin bottom-left)
+    let notchRect: CGRect          // AppKit coords; the physical notch (or a synthetic one)
+    let hasPhysicalNotch: Bool
+
+    /// Rect for the eyes panel: same x/width as the notch, hangs below its bottom edge by `panelHeight`,
+    /// PLUS covers the notch itself, so the panel is one continuous black shape.
+    func panelFrame(panelHeight: CGFloat) -> CGRect
+
+    static func detect(screen: NSScreen) -> NotchGeometry
+}
+```
+
+Detection: if `screen.safeAreaInsets.top > 0`, notch = x from `screen.auxiliaryTopLeftArea!.maxX`
+to `screen.auxiliaryTopRightArea!.minX`, y from `frame.maxY - safeAreaInsets.top` to `frame.maxY`.
+Otherwise synthesize a notch 200pt wide × 32pt tall centered at the top (`hasPhysicalNotch = false`).
+
+### 5.2 NotchWindow
+
+- `NSPanel`, styleMask `[.borderless, .nonactivatingPanel]`, `level = .statusBar + 1`,
+  `collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]`,
+  `backgroundColor = .clear`, `isOpaque = false`, `hasShadow = false`, `hidesOnDeactivate = false`,
+  `isMovable = false`, `ignoresMouseEvents = false`.
+- Frame = `geometry.panelFrame(panelHeight: 34)`. Re-detect on `NSApplication.didChangeScreenParametersNotification`.
+- Content: `NSHostingView(rootView: EyesView(model:))` on a black rounded shape:
+  the notch part is a plain rectangle, the hanging part has bottom corners radius 14.
+  On screens without a physical notch draw the whole shape black too.
+- Right-click (or ctrl-click) anywhere shows an `NSMenu`: **Set goal…**, **Check now**, separator, **Quit Drill Sergeant** (⌘Q).
+- Hover over the eyes is a no-op in V1.
+
+### 5.3 EyesView
+
+```swift
+@MainActor
+final class EyesModel: ObservableObject {
+    @Published var state: CompanionState = .idle
+    @Published var gaze: CGPoint = .zero      // normalized (-1...1, -1...1), (0,0) = center
+    @Published var isBlinking = false
+}
+
+struct EyesView: View { @ObservedObject var model: EyesModel }
+```
+
+Design: two white eyes on black, each ~14×18pt, 12pt apart, in the hanging part of the panel.
+- **idle**: rounded-rect eyes, pupils centered (no pupils drawn; the eye itself is the shape).
+  Blink every 3–6s (random): scale Y to 0.1 for 120ms. Slow 1px drift.
+- **watching**: eyes narrow slightly (height ×0.85) and translate toward `gaze` by up to 4pt.
+  A pupil is not required; move the whole eye. Optional: a small darker inner dot.
+- **angry**: eyes tilt inward: add a black diagonal "brow" mask over the inner-top corner
+  (rotate a black rectangle 20°). Eyes tinted `#FF5A5A`. Still follows gaze. Subtle 2px shake
+  every ~2s.
+- **happy**: eyes become upward arcs (like `^ ^`): draw an arc stroke 3pt white, no fill. Slight
+  bounce on entry.
+- All transitions animated with `.easeInOut(duration: 0.25)`; use `withAnimation` in the model
+  setters or `.animation(_, value:)` modifiers.
+
+### 5.4 CursorTracker
+
+```swift
+@MainActor
+final class CursorTracker {
+    init(eyesModel: EyesModel, windowProvider: @escaping () -> NSWindow?)
+    func start()   // 30Hz timer polling NSEvent.mouseLocation; sets eyesModel.gaze
+    func stop()    // gaze animates back to .zero
+}
+```
+
+Gaze = vector from the panel's center (screen coords) to the mouse, divided by
+(screenWidth/2, screenHeight/2), clamped to -1...1. Start it when state is watching/angry,
+stop otherwise.
+
+---
+
+## 6. Chat bubble
+
+### 6.1 ChatPresenter (protocol; onboarding and coordinator talk to this)
+
+```swift
+@MainActor
+protocol ChatPresenter: AnyObject {
+    /// Show a message bubble under the notch. `autoHide`: hide after 20s (idle/happy) or stay (angry/onboarding).
+    func show(_ text: String, autoHide: Bool)
+    /// Show a message and immediately open the reply text field.
+    func ask(_ text: String)
+    func hide()
+    /// Called when the user submits a reply.
+    var onReply: ((String) -> Void)? { get set }
+    /// Called when the user clicks the bubble body (used by onboarding for "click to grant permission").
+    var onTap: (() -> Void)? { get set }
+}
+```
+
+### 6.2 BubbleWindow / BubbleView
+
+- `NSPanel`, same flags as NotchWindow but `level = .statusBar` and it **can** become key
+  (needs keyboard for the text field): styleMask `[.borderless, .nonactivatingPanel]` and
+  override `canBecomeKey` → true. Width 320pt, height fits content (max 4 lines + input).
+- Position: horizontally centered under the notch panel, 8pt gap below the panel's bottom edge.
+- Look: dark bubble `#1C1C1E` at 96% opacity, corner radius 16, 1pt border white@10%,
+  white 13pt system text, small upward-pointing triangle tail toward the notch.
+- Hover: a hint appears bottom-left inside the bubble: `reply ←` in 11pt secondary label color.
+- Click (anywhere on the bubble, not the input): if `onTap` is set, call it; otherwise open the
+  reply input under the text: an `NSTextField`-style single-line input (SwiftUI `TextField`),
+  placeholder "Talk back…", Return submits → `onReply(text)`, Esc closes the input.
+- While input is open the bubble does not auto-hide.
+- Appear/disappear animation: fade + 6pt slide from the notch, 0.2s.
+- A new `show` while visible replaces the text (no stacking).
+
+Implement `BubbleWindow: ChatPresenter`.
+
+---
+
+## 7. Settings
+
+```swift
+@MainActor
+final class Settings {
+    static let shared = Settings()
+    var goal: String                    // key ds.goal, default ""
+    var model: String                   // key ds.model, default "qwen3-vl:8b"
+    var intervalMinutes: Int            // key ds.intervalMinutes, default 10
+    var onboardingStep: OnboardingStep  // key ds.onboardingStep, default .welcome
+    var ollamaBaseURL: URL              // key ds.ollamaBaseURL, default http://127.0.0.1:11434
+}
+```
+
+Env overrides for development: `DS_MODEL`, `DS_INTERVAL_MINUTES`, `DS_OLLAMA_URL`,
+`DS_RESET_ONBOARDING=1` (clears onboardingStep and goal at launch).
+
+---
+
+## 8. Onboarding
+
+Runs through the bubble. Persist `Settings.onboardingStep` after each step so a relaunch
+resumes where it left off.
+
+```swift
+enum OnboardingStep: String, Codable { case welcome, goal, permission, relaunch, test, done }
+
+@MainActor
+final class OnboardingFlow {
+    init(chat: ChatPresenter, scheduler: Scheduler, settings: Settings, ollama: OllamaClient,
+         relaunch: @escaping () -> Void, runCheck: @escaping (CheckReason) async -> Decision?)
+    var onFinished: (() -> Void)?
+    func start()   // resumes from settings.onboardingStep
+}
+```
+
+Steps:
+
+1. **welcome → goal**: `ask("Drill Sergeant reporting. I watch your screen every 10 minutes and shout when you slack off. Everything runs on a local model. Nothing leaves this Mac. First: what are you working on today?")`. On reply: save `goal`, step = `.permission`.
+2. **permission**: if `ScreenPermission.isGranted()` skip to step 4. Else `show("Good. Now I need Screen Recording permission to see your screen. Click this bubble to grant it.", autoHide: false)` with `onTap` → `ScreenPermission.request()`; if that returns false and the OS prompt did not appear (second attempt), call `openSystemSettings()`. Poll `isGranted()` every 2s. When granted: step = `.relaunch`.
+3. **relaunch**: `show("Permission granted. I have to restart to use it. Click here to restart.", autoHide: false)`, `onTap` → `relaunch()`. On next launch this step is skipped straight to `.test` because permission is granted (check `isGranted()` at start; if `.relaunch` and granted → `.test`).
+4. **test**: first verify Ollama: if not reachable or model missing, `show("I can't reach Ollama or the model {model} is missing. Run install.sh again, or `ollama pull {model}`. I'll keep checking.", autoHide: false)` and retry every 10s. When ready: `show("Let's test it. Open YouTube. I'm watching.", autoHide: false)`, `scheduler.enterWatching()`. Poll `ActiveWindowInspector.current().looksLikeYouTube` every 2s (also accept the user replying "done"). On detection: `runCheck(.onboarding)` → scheduler.apply. Expect angry; the normal angry poll then takes over. When the scheduler reaches `.happy` (or `.idle` if the model was lenient), `show("That's how it works. Now back to: {goal}. Next check in {interval} minutes.", autoHide: true)`, step = `.done`, `onFinished?()`.
+
+If the user never opens YouTube within 3 minutes, `show("Still waiting. Open YouTube so I can show you what happens.", autoHide: false)` and keep polling.
+
+---
+
+## 9. AppCoordinator (wiring)
+
+```swift
+@MainActor
+final class AppCoordinator: SchedulerDelegate {
+    init()
+    func start()            // builds windows, starts onboarding or scheduler
+    func relaunch()         // launches a fresh instance of the bundle (open -n) then terminates
+    func checkNow()
+    func promptForGoal()    // chat.ask("What are you working on?") → save goal, conversation.reset()
+    func quit()
+}
+```
+
+Behavior:
+- `start()`: create `EyesModel`, `NotchWindow`, `BubbleWindow`, `Scheduler(clock: SystemClock())`,
+  `OllamaClient(model: settings.model)`, `Conversation`. Hook the notch menu to `promptForGoal`,
+  `checkNow`, `quit`. If `settings.onboardingStep != .done` run `OnboardingFlow`; else
+  `scheduler.start()`.
+- `scheduler(didChange:)`: update `eyesModel.state`; start/stop `CursorTracker` for
+  watching/angry; when state becomes idle after happy, hide the bubble if not in reply mode.
+- `schedulerRequestsCheck(reason:)`: `Task { let d = await runCheck(reason); scheduler.apply(d) }`.
+  `runCheck`: capture screenshot (on `permissionDenied` → show bubble asking to grant, return
+  `set_idle` with ""), inspect window, build `CheckContext`, `conversation.appendUser(prompt, image:)`,
+  `ollama.decide(messages: [system] + conversation.turns)`. On `OllamaError` → show
+  "Can't reach Ollama…" bubble, return `Decision(tool: .set_idle, snoozeMinutes: nil, message: "")`.
+  Log everything. After a decision: `conversation.appendAssistant(d)`; if `d.message` non-empty,
+  `chat.show(d.message, autoHide: d.tool != .set_angry)`.
+- `chat.onReply`: `conversation.recordHumanReply(text)`, build reply prompt, `ollama.decide`, apply
+  the same post-decision handling. Replies do not capture a screenshot.
+- Handle `applicationShouldTerminate` normally; `quit()` calls `NSApp.terminate(nil)`.
+
+---
+
+## 10. Packaging and install
+
+### 10.1 `Scripts/Info.plist`
+
+```xml
+CFBundleIdentifier com.evanhu.drillsergeant
+CFBundleName Drill Sergeant
+CFBundleDisplayName Drill Sergeant
+CFBundleExecutable DrillSergeant
+CFBundlePackageType APPL
+CFBundleShortVersionString 0.1.0
+CFBundleVersion 1
+LSMinimumSystemVersion 14.0
+LSUIElement true
+NSHighResolutionCapable true
+NSScreenCaptureUsageDescription Drill Sergeant looks at your screen every 10 minutes to check you are on task. Screenshots are analyzed by a local model and never leave this Mac.
+```
+
+### 10.2 `Scripts/bundle.sh`
+
+`swift build -c release --arch arm64`, assemble `build/Drill Sergeant.app/Contents/{MacOS,Resources}`,
+copy binary and Info.plist, write `PkgInfo` (`APPL????`), `codesign --force --deep --sign - "build/Drill Sergeant.app"`.
+Exit non-zero on any failure (`set -euo pipefail`). Print the final path.
+
+### 10.3 `Scripts/run.sh`
+
+Dev helper: `bundle.sh` then `open -n "build/Drill Sergeant.app"`; `--reset` passes `DS_RESET_ONBOARDING=1`
+via `open --env`.
+
+### 10.4 `install.sh`
+
+Curl-able one-liner: `curl -fsSL https://raw.githubusercontent.com/evanhu/drill-sergeant/main/install.sh | bash`
+
+Steps, each printed with a `==>` prefix:
+1. Check `uname -m == arm64` and macOS ≥ 14, else exit with a clear message.
+2. Check `xcode-select -p`; if missing run `xcode-select --install` and tell the user to rerun.
+3. Check Homebrew; if missing, print the brew install command and exit.
+4. Ollama: if `ollama` missing → `brew install --cask ollama`. If present but version < 0.12
+   → `brew upgrade --cask ollama || brew upgrade ollama || true` and re-check; if still old, print
+   "Update Ollama from https://ollama.com/download" and continue.
+5. Start Ollama if `curl -s 127.0.0.1:11434` fails: `open -a Ollama` if the app exists, else
+   `nohup ollama serve >/dev/null 2>&1 &`. Wait up to 30s for the port.
+6. `ollama pull ${DS_MODEL:-qwen3-vl:8b}` (show progress).
+7. Clone or update the repo into `~/.drill-sergeant/src` (`git clone` or `git pull`).
+   If `install.sh` is run from inside a checkout (`Scripts/bundle.sh` exists next to it), use that checkout instead.
+8. `Scripts/bundle.sh`, then `rm -rf "/Applications/Drill Sergeant.app"` and copy the new bundle there.
+9. `open -n "/Applications/Drill Sergeant.app"` and print: "Drill Sergeant is in your notch. Follow the chat bubble."
+
+Idempotent: safe to run twice.
+
+---
+
+## 11. Logging
+
+`Log.info/warn/error(_ message: String)` → `os.Logger(subsystem: "com.evanhu.drillsergeant", category: "app")`
+and also append to `~/Library/Logs/DrillSergeant/app.log` (rotate at 5 MB). Never log screenshot bytes.
+
+---
+
+## 12. Tests (minimum)
+
+- `SchedulerTests`: with `TestClock`: start → watching at T-60s → check requested → apply set_idle → idle,
+  next check +10m; apply set_angry → angry → poll at +30s; set_idle from angry → happy → idle at +30s;
+  snooze(15) → next check at +15m; in-flight guard ignores double triggers; checkNow works from idle.
+- `DecisionTests`: parse clean JSON, fenced JSON, JSON with prose around it, missing snooze_minutes → 10, clamp 500 → 120.
+- `PromptBuilderTests`: system prompt contains goal; check prompt contains window summary, state, age formatting ("2m 10s").
+- `ActiveWindowInfoTests`: `looksLikeYouTube` for title/bundle variants.
+- `NotchGeometryTests`: synthetic fallback dims; `panelFrame` math.
+- `ConversationTests`: image kept only on last user turn; maxTurns trimming.
+
+---
+
+## 13. Non-goals for V1
+
+Multiple displays at once, browser URL extraction, menu bar icon, settings window, launch at login,
+notarization, non-notch UI polish beyond the synthetic notch fallback, Intel Macs.
