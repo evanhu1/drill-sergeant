@@ -1,4 +1,3 @@
-// STUB: implemented in wave 2
 import AppKit
 
 struct NotchGeometry: Equatable {
