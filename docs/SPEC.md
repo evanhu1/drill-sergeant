@@ -723,3 +723,41 @@ Render on a mid-gray (`#808080`) background behind the panel so the black shape'
 The views must expose whatever static inputs they need (blink progress, gaze, hover) as plain
 parameters or model fields so the renderer can set them without timers. Animations are not
 started in render mode.
+
+## 15. Eye design v2 (replaces 5.3 visuals)
+
+Reference: creature.company "cat-smoothie" eyes. Two large cream ovals (sclera) each holding a big
+crimson pupil. The pupil is what expresses; there are no eyebrows in any state.
+
+Geometry (points, in a tray of `panelHeight = 40`; update the NotchWindow, BubbleWindow default, and
+renderer to 40):
+- Sclera: ellipse 22 wide × 27 tall, fill `#FBEEE3`. Left eye rotated -8°, right eye +8° (tops lean
+  outward, like the reference). Gap between eyes 5pt. Pair centered horizontally, vertically centered
+  in the tray with 4pt clearance to the tray's bottom edge.
+- Pupil: ellipse 11 × 13, fill `#C0295A`, clipped to the sclera. Rest position is at the sclera
+  center, offset 1pt downward.
+- Pupil gaze travel: max offset so the pupil stays fully inside the sclera with a 1.5pt margin
+  (≈ ±5pt x, ±6pt y).
+
+Gaze (all states except happy and mid-blink):
+- `CursorTracker` runs **always** while the app is alive (30Hz polling), not only in watching/angry.
+- Mapping: vector from the panel center to the mouse in screen points, divided by (screenWidth/2,
+  screenHeight/2) → v in [-1,1]². Apply `sign(v) * pow(|v|, 0.55)` per axis so mid-screen cursor
+  positions already move the pupil most of the way, then multiply by max travel. Screen y is flipped
+  (mouse below the notch → pupil looks down).
+- Both pupils move together (no convergence). Movement is smoothed with `.interactiveSpring` or
+  `.easeOut(duration: 0.12)` so it feels alive but not laggy.
+
+States:
+- **idle**: as above; blink every 3–6s (sclera and pupil scale Y to 0.08 for 110ms, ease in/out).
+- **watching**: sclera scales to 1.08, pupil shrinks to 0.85 (focused). Blinks less often (6–10s).
+- **angry**: the top of each sclera is cut by a slanted lid: clip the sclera (and pupil) with a
+  shape whose top edge runs from the **outer** top corner at 22% of the eye height down to the
+  **inner** corner at 52% of the eye height (lids slant down toward the nose). Pupil scales to 0.9.
+  No red tint, no brow. Subtle 1.5pt horizontal shake every ~2.5s remains.
+- **happy**: sclera collapses into an upward arc: render a 3.5pt-thick cream arc (the top half of
+  the sclera outline, ends slightly flared), no pupil. Bounce on entry (scale 1.15 → 1.0, 0.3s).
+- Tray hidden: nothing visible (unchanged).
+
+Renders (14.4): add `angry-gaze-left.png` (gaze (-0.8, 0.1)) and `idle-gaze-down.png`
+(gaze (0.3, 0.9)) so lid clipping and travel limits can be checked.
