@@ -32,8 +32,12 @@ struct EyesView: View {
     @State private var saccade: CGPoint = .zero
     @State private var isGlancing = false
 
-    private let scleraSize = CGSize(width: 22, height: 27)
-    private let pupilSize = CGSize(width: 11, height: 13)
+    /// Wider than tall, so the eye reads almond rather than egg.
+    private let scleraSize = CGSize(width: 24, height: 23)
+    /// A cat's vertical slit. Narrow enough to travel sideways, tall enough that it barely can
+    /// travel up or down, which is what `pupilTravel` accounts for.
+    private let pupilSize = CGSize(width: 7, height: 16)
+    private let pupilTravel = CGSize(width: 6, height: 2)
 
     var body: some View {
         HStack(spacing: 5) {
@@ -70,7 +74,6 @@ struct EyesView: View {
     private func eye(_ side: EyeSide) -> some View {
         ZStack {
             standardEye(side)
-                .rotationEffect(.degrees(side == .left ? -8 : 8))
                 .scaleEffect(x: 1, y: model.state == .happy ? 0.08 : 1)
                 .opacity(model.state == .happy ? 0 : 1)
 
@@ -102,8 +105,8 @@ struct EyesView: View {
                     height: pupilSize.height * pupilScale
                 )
                 .offset(
-                    x: lookGaze.x * 5 + convergence(for: side),
-                    y: 1 + lookGaze.y * 6
+                    x: lookGaze.x * pupilTravel.width + convergence(for: side),
+                    y: lookGaze.y * pupilTravel.height
                 )
         }
         .frame(width: scleraSize.width, height: scleraSize.height)

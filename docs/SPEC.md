@@ -742,13 +742,12 @@ periwinkle-blue pupil. The pupil is what expresses; there are no eyebrows in any
 
 Geometry (points, in a tray of `panelHeight = 40`; update the NotchWindow, BubbleWindow default, and
 renderer to 40):
-- Sclera: ellipse 22 wide × 27 tall, fill `#FBEEE3`. Left eye rotated -8°, right eye +8° (tops lean
-  outward, like the reference). Gap between eyes 5pt. Pair centered horizontally, vertically centered
+- Sclera: ellipse 24 wide × 23 tall, fill `#FBEEE3`, level. Wider than tall reads almond rather
+  than egg, and any rotation drops an outer top corner, which reads as sadness. Gap between eyes 5pt. Pair centered horizontally, vertically centered
   in the tray with 4pt clearance to the tray's bottom edge.
-- Pupil: ellipse 11 × 13, fill `#6B78E6`, clipped to the sclera. Rest position is at the sclera
-  center, offset 1pt downward.
-- Pupil gaze travel: max offset so the pupil stays fully inside the sclera with a 1.5pt margin
-  (≈ ±5pt x, ±6pt y).
+- Pupil: a cat's vertical slit, ellipse 7 × 16, fill `#6B78E6`, clipped to the sclera, centred.
+- Pupil gaze travel: ±6pt x, ±2pt y. A tall slit in a short eye has almost no vertical room, so the
+  gaze reads sideways, like a cat's.
 
 Gaze (all states except happy and mid-blink):
 - `CursorTracker` runs **always** while the app is alive (30Hz polling), not only in watching/angry.
