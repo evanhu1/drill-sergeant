@@ -70,7 +70,7 @@ Transitions (Scheduler drives these):
 
 | From | Event | To |
 |---|---|---|
-| idle | 30s before next check | watching |
+| idle | 1s before next check | watching |
 | watching | capture + LLM done, decision `set_idle` | idle (next check in `intervalMinutes`) |
 | watching | decision `set_angry` | angry |
 | watching | decision `snooze(n)` | idle (next check in `n` minutes) |
@@ -84,7 +84,7 @@ Transitions (Scheduler drives these):
 Rules:
 - `intervalMinutes` default 10. The timer always resets after a decision.
 - Entering `happy` from `angry` also resets the timer to `intervalMinutes` (or the snooze length).
-- The 30s pre-roll `watching` state is skipped when the remaining time is already under 30s.
+- The 1s pre-roll `watching` state is skipped when the remaining time is already under 1s.
 - The angry poll: every 10s capture + LLM. It never enters `watching`; eyes already track the
   cursor. The timer starts when the previous decision lands, so with a ~4s model call the real
   cadence is ~14s.
@@ -115,7 +115,7 @@ enum CheckReason { case scheduled, angryPoll, manual, onboarding }
 
 @MainActor
 final class Scheduler {
-    init(clock: Clock, intervalMinutes: Int = 10, preRollSeconds: TimeInterval = 30,
+    init(clock: Clock, intervalMinutes: Int = 10, preRollSeconds: TimeInterval = 1,
          angryPollSeconds: TimeInterval = 10, happySeconds: TimeInterval = 5)
     weak var delegate: SchedulerDelegate?
     private(set) var state: CompanionState          // starts .idle

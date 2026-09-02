@@ -62,7 +62,7 @@ final class Scheduler {
         intervalMinutes: Int = 10,
         workHours: WorkHours = .standard,
         calendar: Calendar = .current,
-        preRollSeconds: TimeInterval = 30,
+        preRollSeconds: TimeInterval = 1,
         angryPollSeconds: TimeInterval = 10,
         happySeconds: TimeInterval = 5
     ) {
