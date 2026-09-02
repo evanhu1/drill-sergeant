@@ -832,3 +832,68 @@ That's how it works. Back to work — next check in {interval} minutes.
 ### 17.3 Dev toolbar
 
 `DevActions.statusText` drops the goal segment: `state=angry (12s) · next check 4:32 PM · model=…`.
+
+## 18. Capture the active window, not the whole screen (replaces 3.2, 3.3)
+
+A screenshot of the whole display carries whatever else is open behind the app the user is
+actually in. Capture just the frontmost window instead, so the model judges the work in front of
+the user. The trade-off is accepted: a distraction sitting in a background window is no longer
+visible to the sergeant.
+
+### 18.1 Choosing the target window
+
+Both `ScreenCapture` and `ActiveWindowInspector` pick the same window:
+
+1. Frontmost application from `NSWorkspace.shared.frontmostApplication`, **skipping our own bundle
+   identifier**. When Drill Sergeant is frontmost (the user clicked into the reply field), fall
+   through to the next application in `NSWorkspace.shared.runningApplications` ordered by
+   `isActive`, else the frontmost window of any other application on screen.
+2. Its frontmost on-screen window: `kCGWindowLayer == 0`, non-empty bounds, ordered first in
+   `CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)`.
+   Ignore windows smaller than 200×150 points (palettes, HUDs).
+
+Factor this into one place, e.g. `ActiveWindowInspector.currentTarget() -> TargetWindow?` carrying
+the window id, owning pid, app name, bundle id and title, and have `ActiveWindowInfo.current()`
+build on it so both agree.
+
+### 18.2 Capturing it
+
+```swift
+enum CaptureSource: Equatable { case window(String), display }   // associated value: app name
+```
+
+`Screenshot` gains `let source: CaptureSource`.
+
+Use `SCContentFilter(desktopIndependentWindow:)` with the `SCWindow` whose `windowID` matches the
+target. Set `SCStreamConfiguration.width/height` from the window's size scaled so the longest edge
+is ≤ 1280, `showsCursor = false`, and an opaque `backgroundColor` (black) so transparent corners do
+not encode as noise. This captures the window's own content even when another window overlaps it.
+
+Fall back to the existing full-display capture (`source = .display`) when there is no target
+window, when its `SCWindow` cannot be found, or when window capture throws. Never fall back
+silently: `Log.info` which path was used.
+
+`Log.info` after every capture: `Captured window "Arc" 1280x800 (190 KB)` or
+`Captured display 1280x827 (190 KB)`.
+
+### 18.3 Prompt copy (replaces the matching lines of 17.1)
+
+Second paragraph becomes:
+
+```
+Every few minutes you receive a screenshot of the window the user is working in, plus that window's title.
+```
+
+The `set_idle` line becomes:
+
+```
+- set_idle: they are working, or the window is ambiguous but plausibly work. Message may be "" to stay quiet, or a short nod.
+```
+
+The judging rule becomes:
+
+```
+- Judge what is in the window, not which app it is. A video is work if it is documentation or a talk they are studying. A browser is slacking if it is a feed.
+```
+
+Everything else in the system prompt is unchanged.
