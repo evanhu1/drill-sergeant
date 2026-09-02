@@ -974,8 +974,6 @@ the coordinator only reports what the user is doing.
 
 - **Saccades** (idle only): every 2–5s the pupils flick by up to ±0.35 x / ±0.2 y of gaze range
   for 120–200ms, then return. Skipped while glancing at the bubble.
-- **Lid follows gaze**: the upper lid drops by `max(0, gaze.y) × 0.2` of the eye height when the
-  pupils look down. Looking up widens the eye by up to 5% instead, since there is no lid above.
 - **Convergence**: `EyesModel.proximity` is 1 when the cursor is within 60pt of the panel centre,
   fading to 0 at 360pt. Each pupil shifts inward by `1.6pt × proximity`.
 - **Scanning while watching**: on entering `watching`, the lids drop a further 25% and the pupils

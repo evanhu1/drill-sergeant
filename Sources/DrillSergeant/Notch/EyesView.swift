@@ -123,8 +123,7 @@ struct EyesView: View {
         .clipShape(Ellipse())
         .clipShape(lidClip(for: side))
         .clipShape(EyelidClip(progress: eyelidProgress))
-        // Looking up widens the eye a touch, since there is no lid above to raise.
-        .scaleEffect(x: scleraScale, y: scleraScale * (1 + max(0, -lookGaze.y) * 0.05))
+        .scaleEffect(scleraScale)
     }
 
     private func lidClip(for side: EyeSide) -> AngryLidClip {
@@ -191,11 +190,9 @@ struct EyesView: View {
 
     // MARK: - Lids
 
-    /// The upper lid follows the pupil down, and drops a little further while scanning.
+    /// The lids lower while the eyes sweep the screen.
     private var lidDrop: CGFloat {
-        let follow = max(0, lookGaze.y) * 0.2
-        let scanning: CGFloat = activeScanPhase == nil ? 0 : 0.25
-        return follow + scanning
+        activeScanPhase == nil ? 0 : 0.25
     }
 
     private var blinkAmount: CGFloat {
