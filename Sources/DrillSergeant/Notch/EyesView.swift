@@ -72,7 +72,7 @@ struct EyesView: View {
                 .fill(cream)
 
             Ellipse()
-                .fill(crimson)
+                .fill(iris)
                 .frame(
                     width: pupilSize.width * pupilScale,
                     height: pupilSize.height * pupilScale
@@ -85,7 +85,8 @@ struct EyesView: View {
         .frame(width: scleraSize.width, height: scleraSize.height)
         .clipShape(Ellipse())
         .clipShape(lidClip(for: side))
-        .scaleEffect(x: scleraScale, y: scleraScale * blinkScale)
+        .clipShape(EyelidClip(progress: blinkAmount))
+        .scaleEffect(scleraScale)
     }
 
     private func lidClip(for side: EyeSide) -> AngryLidClip {
@@ -118,17 +119,16 @@ struct EyesView: View {
         }
     }
 
-    private var blinkScale: CGFloat {
-        let progress = blinkProgress ?? (model.isBlinking ? 1 : 0)
-        return 1 - progress.clamped(to: 0 ... 1) * 0.92
+    private var blinkAmount: CGFloat {
+        (blinkProgress ?? (model.isBlinking ? 1 : 0)).clamped(to: 0 ... 1)
     }
 
     private var cream: Color {
         Color(red: 251 / 255, green: 238 / 255, blue: 227 / 255)
     }
 
-    private var crimson: Color {
-        Color(red: 192 / 255, green: 41 / 255, blue: 90 / 255)
+    private var iris: Color {
+        Color(red: 107 / 255, green: 120 / 255, blue: 230 / 255)
     }
 
     private func runBlinkLoopIfNeeded() async {
@@ -146,11 +146,11 @@ struct EyesView: View {
                       (model.state == .idle || model.state == .watching)
                 else { break }
 
-                withAnimation(.easeInOut(duration: 0.055)) {
+                withAnimation(.easeIn(duration: 0.07)) {
                     model.isBlinking = true
                 }
-                try await sleep(seconds: 0.11)
-                withAnimation(.easeInOut(duration: 0.055)) {
+                try await sleep(seconds: 0.1)
+                withAnimation(.easeOut(duration: 0.13)) {
                     model.isBlinking = false
                 }
             } catch {
@@ -254,5 +254,35 @@ private struct HappyEyeArc: Shape {
 private extension CGFloat {
     func clamped(to range: ClosedRange<CGFloat>) -> CGFloat {
         Swift.min(Swift.max(self, range.lowerBound), range.upperBound)
+    }
+}
+
+/// An eyelid closing from the top. The lid's edge is a curve that dips in the middle, so the eye
+/// shuts the way a lid does rather than collapsing into a straight slit.
+private struct EyelidClip: Shape {
+    var progress: CGFloat
+
+    var animatableData: CGFloat {
+        get { progress }
+        set { progress = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        guard progress > 0 else { return Path(rect) }
+
+        let bow = rect.height * 0.13
+        // Travel far enough that the bowed edge clears the bottom of the eye when fully closed.
+        let edgeY = rect.minY - bow + (rect.height + bow) * min(progress, 1)
+
+        var path = Path()
+        path.move(to: CGPoint(x: rect.minX, y: edgeY))
+        path.addQuadCurve(
+            to: CGPoint(x: rect.maxX, y: edgeY),
+            control: CGPoint(x: rect.midX, y: edgeY + 2 * bow)
+        )
+        path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
+        path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+        path.closeSubpath()
+        return path
     }
 }

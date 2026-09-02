@@ -732,14 +732,14 @@ started in render mode.
 ## 15. Eye design v2 (replaces 5.3 visuals)
 
 Reference: creature.company "cat-smoothie" eyes. Two large cream ovals (sclera) each holding a big
-crimson pupil. The pupil is what expresses; there are no eyebrows in any state.
+periwinkle-blue pupil. The pupil is what expresses; there are no eyebrows in any state.
 
 Geometry (points, in a tray of `panelHeight = 40`; update the NotchWindow, BubbleWindow default, and
 renderer to 40):
 - Sclera: ellipse 22 wide × 27 tall, fill `#FBEEE3`. Left eye rotated -8°, right eye +8° (tops lean
   outward, like the reference). Gap between eyes 5pt. Pair centered horizontally, vertically centered
   in the tray with 4pt clearance to the tray's bottom edge.
-- Pupil: ellipse 11 × 13, fill `#C0295A`, clipped to the sclera. Rest position is at the sclera
+- Pupil: ellipse 11 × 13, fill `#6B78E6`, clipped to the sclera. Rest position is at the sclera
   center, offset 1pt downward.
 - Pupil gaze travel: max offset so the pupil stays fully inside the sclera with a 1.5pt margin
   (≈ ±5pt x, ±6pt y).
@@ -754,7 +754,10 @@ Gaze (all states except happy and mid-blink):
   `.easeOut(duration: 0.12)` so it feels alive but not laggy.
 
 States:
-- **idle**: as above; blink every 3–6s (sclera and pupil scale Y to 0.08 for 110ms, ease in/out).
+- **idle**: as above; blink every 3–6s. The blink is an eyelid sweeping down from the top of the
+  eye, its edge a curve that dips ~13% of the eye height in the middle, never a straight slit or a
+  vertical squash. It shuts in 70ms, holds 100ms, and opens over 130ms, because real lids open
+  slower than they close.
 - **watching**: sclera scales to 1.08, pupil shrinks to 0.85 (focused). Blinks less often (6–10s).
 - **angry**: the top of each sclera is cut by a slanted lid: clip the sclera (and pupil) with a
   shape whose top edge runs from the **outer** top corner at 22% of the eye height down to the
