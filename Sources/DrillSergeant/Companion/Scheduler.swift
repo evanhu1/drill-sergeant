@@ -109,6 +109,29 @@ final class Scheduler {
         transition(to: .watching)
     }
 
+    /// Forces a state while preserving that state's normal timers for developer tools.
+    func debugTransition(to state: CompanionState) {
+        isStarted = true
+        isCheckInFlight = false
+        cancelAllTimers()
+        nextCheckAt = nil
+
+        switch state {
+        case .idle:
+            apply(
+                Decision(tool: .set_idle, snoozeMinutes: nil, message: "")
+            )
+        case .watching:
+            enterWatching()
+        case .angry:
+            apply(
+                Decision(tool: .set_angry, snoozeMinutes: nil, message: "")
+            )
+        case .happy:
+            enterHappy(nextCheckMinutes: intervalMinutes)
+        }
+    }
+
     private func applyFromAngry(_ decision: Decision) {
         switch decision.tool {
         case .set_angry:

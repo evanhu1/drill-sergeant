@@ -7,6 +7,7 @@ final class NotchWindow: NSPanel {
 
     var onSetGoal: (() -> Void)?
     var onCheckNow: (() -> Void)?
+    var onDeveloper: (() -> Void)?
     var onQuit: (() -> Void)?
 
     private let eyesModel: EyesModel
@@ -122,6 +123,9 @@ final class NotchWindow: NSPanel {
         menu.addItem(
             menuItem(title: "Check now", action: #selector(checkNow(_:)))
         )
+        menu.addItem(
+            menuItem(title: "Developer…", action: #selector(showDeveloper(_:)))
+        )
         menu.addItem(.separator())
 
         let quitItem = menuItem(
@@ -148,22 +152,27 @@ final class NotchWindow: NSPanel {
         onCheckNow?()
     }
 
+    @objc private func showDeveloper(_ sender: NSMenuItem) {
+        onDeveloper?()
+    }
+
     @objc private func quit(_ sender: NSMenuItem) {
         onQuit?()
     }
 }
 
-private struct NotchPanelContent: View {
+struct NotchPanelContent: View {
     @ObservedObject var model: EyesModel
     let notchHeight: CGFloat
     let panelHeight: CGFloat
+    var trayOffset: CGFloat = 0 // TODO(merge): replace with the tray implementation from 14.1.
+    var blinkProgress: CGFloat? = nil
+    var gaze: CGPoint? = nil
+    var animationsEnabled = true
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            VStack(spacing: 0) {
-                Rectangle()
-                    .fill(.black)
-                    .frame(height: notchHeight)
+        ZStack(alignment: .top) {
+            ZStack(alignment: .bottom) {
                 UnevenRoundedRectangle(
                     topLeadingRadius: 0,
                     bottomLeadingRadius: 14,
@@ -173,10 +182,23 @@ private struct NotchPanelContent: View {
                 )
                 .fill(.black)
                 .frame(height: panelHeight)
-            }
 
-            EyesView(model: model)
+                EyesView(
+                    model: model,
+                    blinkProgress: blinkProgress,
+                    gaze: gaze,
+                    animationsEnabled: animationsEnabled
+                )
                 .frame(height: panelHeight)
+            }
+            .frame(height: panelHeight)
+            .offset(y: notchHeight + trayOffset)
+
+            Rectangle()
+                .fill(.black)
+                .frame(height: notchHeight)
         }
+        .frame(height: notchHeight + panelHeight, alignment: .top)
+        .clipped()
     }
 }

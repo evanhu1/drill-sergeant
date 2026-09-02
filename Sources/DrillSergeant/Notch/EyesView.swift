@@ -10,6 +10,9 @@ final class EyesModel: ObservableObject {
 @MainActor
 struct EyesView: View {
     @ObservedObject var model: EyesModel
+    var blinkProgress: CGFloat? = nil
+    var gaze: CGPoint? = nil
+    var animationsEnabled = true
 
     @State private var idleDrift = false
     @State private var shakeOffset: CGFloat = 0
@@ -27,14 +30,17 @@ struct EyesView: View {
             y: gazeOffset.height + driftOffset.height + happyBounce
         )
         .animation(transitionAnimation, value: model.state)
-        .animation(transitionAnimation, value: model.gaze)
+        .animation(transitionAnimation, value: effectiveGaze)
         .task(id: model.state) {
+            guard animationsEnabled else { return }
             await runBlinkLoopIfNeeded()
         }
         .task {
+            guard animationsEnabled else { return }
             await runIdleDriftLoop()
         }
         .task(id: model.state) {
+            guard animationsEnabled else { return }
             await runStateAccent()
         }
     }
@@ -50,7 +56,7 @@ struct EyesView: View {
                 .opacity(model.state == .happy ? 0 : 1)
                 .scaleEffect(
                     x: 1,
-                    y: model.isBlinking && model.state == .idle ? 0.1 : 1,
+                    y: blinkScale,
                     anchor: .center
                 )
 
@@ -113,13 +119,24 @@ struct EyesView: View {
             return .zero
         }
         return CGSize(
-            width: model.gaze.x * 4,
-            height: -model.gaze.y * 4
+            width: effectiveGaze.x * 4,
+            height: -effectiveGaze.y * 4
         )
     }
 
+    private var effectiveGaze: CGPoint {
+        gaze ?? model.gaze
+    }
+
+    private var blinkScale: CGFloat {
+        guard model.state == .idle else { return 1 }
+        let progress = blinkProgress
+            ?? (model.isBlinking ? 1 : 0)
+        return 1 - min(max(progress, 0), 1) * 0.9
+    }
+
     private var driftOffset: CGSize {
-        guard model.state == .idle else { return .zero }
+        guard animationsEnabled, model.state == .idle else { return .zero }
         return CGSize(
             width: idleDrift ? 0.8 : -0.8,
             height: idleDrift ? -0.35 : 0.35
