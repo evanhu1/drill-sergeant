@@ -329,10 +329,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         let screenshot: Screenshot
         do {
             screenshot = try await ScreenCapture.capture()
-            Log.info(
-                "Captured \(screenshot.width)x\(screenshot.height) screenshot "
-                    + "(\(screenshot.jpegData.count) bytes)"
-            )
+            logCapture(screenshot)
         } catch ScreenCaptureError.permissionDenied {
             Log.warn("Screen capture permission is not granted")
             if pendingReplyCount == 0 {
@@ -559,6 +556,22 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         case .permissionDenied: return "permission denied"
         case .noDisplay: return "no display"
         case let .failed(message): return message
+        }
+    }
+
+    private func logCapture(_ screenshot: Screenshot) {
+        let kilobytes = Int((Double(screenshot.jpegData.count) / 1_024).rounded())
+        switch screenshot.source {
+        case let .window(appName):
+            Log.info(
+                "Captured window \"\(appName)\" \(screenshot.width)x\(screenshot.height) "
+                    + "(\(kilobytes) KB)"
+            )
+        case .display:
+            Log.info(
+                "Captured display \(screenshot.width)x\(screenshot.height) "
+                    + "(\(kilobytes) KB)"
+            )
         }
     }
 

@@ -2,11 +2,17 @@ import AppKit
 import CoreGraphics
 import ScreenCaptureKit
 
+enum CaptureSource: Equatable {
+    case window(String)
+    case display
+}
+
 struct Screenshot {
     let jpegData: Data
     let width: Int
     let height: Int
     let capturedAt: Date
+    let source: CaptureSource
 
     var base64: String { jpegData.base64EncodedString() }
 }
@@ -18,7 +24,7 @@ enum ScreenCaptureError: Error {
 }
 
 enum ScreenCapture {
-    /// Captures and downscales the display currently containing the mouse cursor.
+    /// Captures the active window, falling back to the display at the cursor.
     static func capture() async throws -> Screenshot {
         guard ScreenPermission.isGranted() else {
             throw ScreenCaptureError.permissionDenied
@@ -29,39 +35,31 @@ enum ScreenCapture {
                 false,
                 onScreenWindowsOnly: true
             )
-            guard let display = displayAtCursor(from: content.displays) else {
-                throw ScreenCaptureError.noDisplay
-            }
 
-            let ownPID = ProcessInfo.processInfo.processIdentifier
-            let ownWindows = content.windows.filter {
-                $0.owningApplication?.processID == ownPID
+            if let target = ActiveWindowInspector.currentTarget() {
+                if let window = content.windows.first(where: {
+                    $0.windowID == target.windowID
+                }) {
+                    do {
+                        Log.info("Using window capture for \"\(target.appName)\"")
+                        return try await capture(window: window, target: target)
+                    } catch {
+                        Log.info(
+                            "Window capture for \"\(target.appName)\" failed; "
+                                + "falling back to display: \(error.localizedDescription)"
+                        )
+                    }
+                } else {
+                    Log.info(
+                        "Target window for \"\(target.appName)\" is not shareable; "
+                            + "falling back to display"
+                    )
+                }
+            } else {
+                Log.info("No eligible target window; falling back to display")
             }
-            let filter = SCContentFilter(
-                display: display,
-                excludingWindows: ownWindows
-            )
-            let size = scaledSize(width: display.width, height: display.height)
-            let configuration = SCStreamConfiguration()
-            configuration.width = size.width
-            configuration.height = size.height
-            configuration.scalesToFit = true
-            configuration.showsCursor = false
-
-            let image = try await SCScreenshotManager.captureImage(
-                contentFilter: filter,
-                configuration: configuration
-            )
-            guard let jpegData = jpegData(from: image) else {
-                throw ScreenCaptureError.failed("Could not encode screenshot as JPEG")
-            }
-
-            return Screenshot(
-                jpegData: jpegData,
-                width: image.width,
-                height: image.height,
-                capturedAt: Date()
-            )
+            Log.info("Using display capture fallback")
+            return try await captureDisplay(from: content)
         } catch let error as ScreenCaptureError {
             throw error
         } catch {
@@ -70,6 +68,81 @@ enum ScreenCapture {
             }
             throw ScreenCaptureError.failed(error.localizedDescription)
         }
+    }
+
+    private static func capture(
+        window: SCWindow,
+        target: TargetWindow
+    ) async throws -> Screenshot {
+        let width = max(1, Int(window.frame.width.rounded()))
+        let height = max(1, Int(window.frame.height.rounded()))
+        let size = scaledSize(width: width, height: height)
+        let configuration = configuration(for: size)
+        let backgroundColor = CGColor(gray: 0, alpha: 1)
+        configuration.backgroundColor = backgroundColor
+        defer { withExtendedLifetime(backgroundColor) {} }
+        let filter = SCContentFilter(desktopIndependentWindow: window)
+
+        return try await screenshot(
+            filter: filter,
+            configuration: configuration,
+            source: .window(target.appName)
+        )
+    }
+
+    private static func captureDisplay(
+        from content: SCShareableContent
+    ) async throws -> Screenshot {
+        guard let display = displayAtCursor(from: content.displays) else {
+            throw ScreenCaptureError.noDisplay
+        }
+        let ownPID = ProcessInfo.processInfo.processIdentifier
+        let ownWindows = content.windows.filter {
+            $0.owningApplication?.processID == ownPID
+        }
+        let filter = SCContentFilter(
+            display: display,
+            excludingWindows: ownWindows
+        )
+        let size = scaledSize(width: display.width, height: display.height)
+        return try await screenshot(
+            filter: filter,
+            configuration: configuration(for: size),
+            source: .display
+        )
+    }
+
+    private static func configuration(
+        for size: (width: Int, height: Int)
+    ) -> SCStreamConfiguration {
+        let configuration = SCStreamConfiguration()
+        configuration.width = size.width
+        configuration.height = size.height
+        configuration.scalesToFit = true
+        configuration.showsCursor = false
+        return configuration
+    }
+
+    private static func screenshot(
+        filter: SCContentFilter,
+        configuration: SCStreamConfiguration,
+        source: CaptureSource
+    ) async throws -> Screenshot {
+        let image = try await SCScreenshotManager.captureImage(
+            contentFilter: filter,
+            configuration: configuration
+        )
+        guard let jpegData = jpegData(from: image) else {
+            throw ScreenCaptureError.failed("Could not encode screenshot as JPEG")
+        }
+
+        return Screenshot(
+            jpegData: jpegData,
+            width: image.width,
+            height: image.height,
+            capturedAt: Date(),
+            source: source
+        )
     }
 
     static func scaledSize(

@@ -42,4 +42,22 @@ final class ActiveWindowInfoTests: XCTestCase {
         )
         XCTAssertFalse(info.looksLikeYouTube)
     }
+
+    func testTargetWindowRejectsWindowsBelowMinimumSize() {
+        XCTAssertFalse(
+            ActiveWindowInspector.isEligibleWindow(
+                bounds: CGRect(x: 0, y: 0, width: 199, height: 150)
+            )
+        )
+        XCTAssertFalse(
+            ActiveWindowInspector.isEligibleWindow(
+                bounds: CGRect(x: 0, y: 0, width: 200, height: 149)
+            )
+        )
+        XCTAssertTrue(
+            ActiveWindowInspector.isEligibleWindow(
+                bounds: CGRect(x: 0, y: 0, width: 200, height: 150)
+            )
+        )
+    }
 }
