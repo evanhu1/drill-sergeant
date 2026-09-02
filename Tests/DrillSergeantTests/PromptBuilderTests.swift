@@ -14,6 +14,8 @@ final class PromptBuilderTests: XCTestCase {
             - set_idle: they are working, or the window is ambiguous but plausibly work. Message may be "" to stay quiet, or a short nod.
             - set_angry: they are clearly slacking off: YouTube, social media, news feeds, shopping, games, idle scrolling. Message is a short bark telling them to close it and get back to work.
             - snooze: they gave a legitimate reason for a break, or asked for time. Set snooze_minutes (1-120). Message acknowledges it briefly.
+            - save_user_preference(text): This tool writes a user preference to memory forever. Use it when a user gives feedback or rules on what does or does not count as a distraction or work. Put the durable rule in text and briefly acknowledge it in message.
+              Call this sparingly. Negotiate with the user on preferences that seem like they could potentially be excuses or overly generous.
 
             Rules:
             - Be blunt, loud, and short: at most 2 sentences, under 160 characters. Drill sergeant tone. No slurs, no insults about the person, no profanity beyond "damn"/"hell".
@@ -21,6 +23,7 @@ final class PromptBuilderTests: XCTestCase {
             - Code, documents, email, design tools, terminals, chat with coworkers, and research all count as work.
             - Judge what is in the window, not which app it is. A video is work if it is documentation or a talk they are studying. A browser is slacking if it is a feed.
             - If the user replies with a reason, judge it fairly. Do not get talked into endless snoozes: after one snooze, be skeptical.
+            - Call save_user_preference only in direct response to a new user reply, never during a screenshot check or for a preference already listed.
             - When you are currently angry and the distraction is gone, call set_idle with a brief approving message.
             - Output only the JSON tool call.
             """
@@ -33,6 +36,9 @@ final class PromptBuilderTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Current state: watching (for 2m 10s)"))
         XCTAssertTrue(prompt.contains("Previous state: idle"))
         XCTAssertTrue(prompt.contains("Check reason: angry poll — is the distraction still open?"))
+        XCTAssertTrue(prompt.contains("User preferences (saved forever):"))
+        XCTAssertTrue(prompt.contains("- YouTube tutorials count as work."))
+        XCTAssertTrue(prompt.contains("- Social feeds are distracting."))
     }
 
     func testReplyPromptContainsReplyAndWindow() {
@@ -42,9 +48,26 @@ final class PromptBuilderTests: XCTestCase {
         )
         XCTAssertTrue(prompt.contains(#"The user replied to you: "I need five minutes""#))
         XCTAssertTrue(prompt.contains("Safari — “API documentation”"))
+        XCTAssertTrue(prompt.contains("User preferences (saved forever):"))
     }
 
-    private func makeContext(stateAge: TimeInterval) -> CheckContext {
+    func testCheckPromptAlwaysIncludesPreferenceSection() {
+        let prompt = PromptBuilder.checkPrompt(
+            makeContext(stateAge: 0, userPreferences: [])
+        )
+
+        XCTAssertTrue(
+            prompt.contains("User preferences (saved forever):\n(none saved)")
+        )
+    }
+
+    private func makeContext(
+        stateAge: TimeInterval,
+        userPreferences: [String] = [
+            "YouTube tutorials count as work.",
+            "Social feeds are distracting.",
+        ]
+    ) -> CheckContext {
         CheckContext(
             state: .watching,
             previousState: .idle,
@@ -55,6 +78,7 @@ final class PromptBuilderTests: XCTestCase {
                 windowTitle: "API documentation"
             ),
             lastUserMessage: nil,
+            userPreferences: userPreferences,
             now: Date(timeIntervalSince1970: 0),
             reason: .angryPoll
         )

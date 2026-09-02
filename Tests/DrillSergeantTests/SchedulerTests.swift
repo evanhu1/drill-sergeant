@@ -60,6 +60,32 @@ final class SchedulerTests: XCTestCase {
         XCTAssertEqual(scheduler.nextCheckAt, Date(timeIntervalSince1970: 900))
     }
 
+    func testSavingPreferenceResumesMonitoringWithoutChangingVerdict() {
+        let clock = TestClock()
+        let scheduler = Scheduler(clock: clock)
+        let delegate = SchedulerDelegateSpy()
+        scheduler.delegate = delegate
+        let decision = Decision(
+            tool: .save_user_preference,
+            snoozeMinutes: nil,
+            message: "Got it.",
+            text: "YouTube tutorials count as work."
+        )
+
+        scheduler.checkNow()
+        scheduler.apply(decision)
+        XCTAssertEqual(scheduler.state, .idle)
+        XCTAssertEqual(scheduler.nextCheckAt, Date(timeIntervalSince1970: 600))
+
+        scheduler.debugTransition(to: .angry)
+        scheduler.apply(decision)
+        XCTAssertEqual(scheduler.state, .angry)
+        clock.advance(by: 10)
+        XCTAssertEqual(scheduler.state, .angry)
+        XCTAssertEqual(delegate.requests.count, 2)
+        XCTAssertAngryPoll(delegate.requests[1])
+    }
+
     func testInFlightGuardIgnoresDoubleManualTrigger() {
         let clock = TestClock()
         let scheduler = Scheduler(clock: clock)

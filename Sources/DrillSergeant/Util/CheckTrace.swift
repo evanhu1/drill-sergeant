@@ -138,6 +138,7 @@ struct CheckTrace {
                 "--- parsed",
                 "tool: \(result.decision.tool.rawValue)",
                 "snooze_minutes: \(result.decision.snoozeMinutes.map(String.init) ?? "none")",
+                "text: \(result.decision.text ?? "none")",
                 "message: \(result.decision.message)",
             ].joined(separator: "\n") + "\n"
 

@@ -6,6 +6,7 @@ struct CheckContext {
     let stateAge: TimeInterval
     let window: ActiveWindowInfo
     let lastUserMessage: String?
+    let userPreferences: [String]
     let now: Date
     let reason: CheckReason
 }
@@ -21,6 +22,8 @@ enum PromptBuilder {
         - set_idle: they are working, or the window is ambiguous but plausibly work. Message may be "" to stay quiet, or a short nod.
         - set_angry: they are clearly slacking off: YouTube, social media, news feeds, shopping, games, idle scrolling. Message is a short bark telling them to close it and get back to work.
         - snooze: they gave a legitimate reason for a break, or asked for time. Set snooze_minutes (1-120). Message acknowledges it briefly.
+        - save_user_preference(text): This tool writes a user preference to memory forever. Use it when a user gives feedback or rules on what does or does not count as a distraction or work. Put the durable rule in text and briefly acknowledge it in message.
+          Call this sparingly. Negotiate with the user on preferences that seem like they could potentially be excuses or overly generous.
 
         Rules:
         - Be blunt, loud, and short: at most 2 sentences, under 160 characters. Drill sergeant tone. No slurs, no insults about the person, no profanity beyond "damn"/"hell".
@@ -28,6 +31,7 @@ enum PromptBuilder {
         - Code, documents, email, design tools, terminals, chat with coworkers, and research all count as work.
         - Judge what is in the window, not which app it is. A video is work if it is documentation or a talk they are studying. A browser is slacking if it is a feed.
         - If the user replies with a reason, judge it fairly. Do not get talked into endless snoozes: after one snooze, be skeptical.
+        - Call save_user_preference only in direct response to a new user reply, never during a screenshot check or for a preference already listed.
         - When you are currently angry and the distraction is gone, call set_idle with a brief approving message.
         - Output only the JSON tool call.
         """
@@ -42,6 +46,10 @@ enum PromptBuilder {
         Active window: \(context.window.summary)
         Last thing the user said to you: \(context.lastUserMessage ?? "(nothing yet)")
         Check reason: \(reasonText(context.reason))
+
+        User preferences (saved forever):
+        \(formatPreferences(context.userPreferences))
+
         Decide now.
         """
     }
@@ -52,6 +60,10 @@ enum PromptBuilder {
         Time: \(formatTime(context.now))
         Current state: \(context.state.rawValue)
         Active window: \(context.window.summary)
+
+        User preferences (saved forever):
+        \(formatPreferences(context.userPreferences))
+
         Respond with one tool call.
         """
     }
@@ -86,5 +98,10 @@ enum PromptBuilder {
         case .manual: return "manual"
         case .onboarding: return "onboarding test"
         }
+    }
+
+    private static func formatPreferences(_ preferences: [String]) -> String {
+        guard !preferences.isEmpty else { return "(none saved)" }
+        return preferences.map { "- \($0)" }.joined(separator: "\n")
     }
 }

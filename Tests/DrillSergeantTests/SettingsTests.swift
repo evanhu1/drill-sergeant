@@ -12,18 +12,23 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(settings.intervalMinutes, 10)
         XCTAssertEqual(settings.onboardingStep, .welcome)
         XCTAssertEqual(settings.ollamaBaseURL.absoluteString, "http://127.0.0.1:11434")
+        XCTAssertEqual(settings.userPreferences, [])
         XCTAssertTrue(settings.tracingEnabled)
 
         settings.model = "custom:8b"
         settings.intervalMinutes = 15
         settings.onboardingStep = .test
         settings.ollamaBaseURL = URL(string: "http://localhost:9999")!
+        XCTAssertTrue(settings.saveUserPreference("YouTube tutorials count as work."))
+        XCTAssertFalse(settings.saveUserPreference("youtube tutorials count as work."))
+        XCTAssertFalse(settings.saveUserPreference("   "))
 
         let reloaded = Settings(defaults: defaults, environment: [:])
         XCTAssertEqual(reloaded.model, "custom:8b")
         XCTAssertEqual(reloaded.intervalMinutes, 15)
         XCTAssertEqual(reloaded.onboardingStep, .test)
         XCTAssertEqual(reloaded.ollamaBaseURL.absoluteString, "http://localhost:9999")
+        XCTAssertEqual(reloaded.userPreferences, ["YouTube tutorials count as work."])
     }
 
     func testEnvironmentOverridesDevelopmentValues() {
@@ -61,6 +66,7 @@ final class SettingsTests: XCTestCase {
         let (defaults, suiteName) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         defaults.set(OnboardingStep.done.rawValue, forKey: "ds.onboardingStep")
+        defaults.set(["Slack counts as work."], forKey: "ds.userPreferences")
 
         let settings = Settings(
             defaults: defaults,
@@ -68,6 +74,7 @@ final class SettingsTests: XCTestCase {
         )
 
         XCTAssertEqual(settings.onboardingStep, .welcome)
+        XCTAssertEqual(settings.userPreferences, ["Slack counts as work."])
     }
 
     func testTraceEnvironmentCanDisableTracing() {

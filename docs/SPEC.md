@@ -1046,3 +1046,41 @@ before launching. The ad-hoc signature's designated requirement is a bare cdhash
 invalidates the grant while System Settings still lists the app as allowed and capture fails
 silently. Resetting turns that into a fresh prompt. A stable self-signed identity would remove the
 need for this entirely.
+
+## 24. Persistent user preferences
+
+The model has a fourth structured action:
+
+```swift
+enum Tool: String, Codable { case set_idle, snooze, set_angry, save_user_preference }
+
+struct Decision: Codable, Equatable {
+    // Existing fields remain unchanged.
+    let text: String?  // required when tool == .save_user_preference
+}
+```
+
+Its tool description is:
+
+```
+save_user_preference(text): This tool writes a user preference to memory forever. Use it when a
+user gives feedback or rules on what does or does not count as a distraction or work.
+Call this sparingly. Negotiate with the user on preferences that seem like they could potentially
+be excuses or overly generous.
+```
+
+Non-empty preferences are stored as a durable, de-duplicated `[String]` in `UserDefaults` under
+`ds.userPreferences`. They survive app relaunches and onboarding resets. Saving a preference does
+not itself reinterpret the current activity: from `angry`, the scheduler stays angry and polls
+again; from any other state, it returns to the normal idle schedule.
+
+`CheckContext` gains `let userPreferences: [String]`. Every screenshot-check prompt includes a
+separate section, even when the list is empty:
+
+```
+User preferences (saved forever):
+- YouTube tutorials count as work.
+```
+
+The reply prompt includes the same section so the model can avoid saving duplicate rules.
+Successful check traces include the parsed `text` argument alongside the existing decision fields.

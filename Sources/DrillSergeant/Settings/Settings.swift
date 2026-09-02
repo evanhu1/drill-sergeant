@@ -9,6 +9,7 @@ final class Settings {
         static let intervalMinutes = "ds.intervalMinutes"
         static let onboardingStep = "ds.onboardingStep"
         static let ollamaBaseURL = "ds.ollamaBaseURL"
+        static let userPreferences = "ds.userPreferences"
         static let retiredSetting = String(
             decoding: [100, 115, 46, 103, 111, 97, 108],
             as: UTF8.self
@@ -79,5 +80,26 @@ final class Settings {
 
     var tracingEnabled: Bool {
         environment["DS_TRACE"] != "0"
+    }
+
+    var userPreferences: [String] {
+        defaults.stringArray(forKey: Key.userPreferences) ?? []
+    }
+
+    /// Saves a durable rule once. Returns false for blank or duplicate preferences.
+    @discardableResult
+    func saveUserPreference(_ text: String) -> Bool {
+        let preference = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !preference.isEmpty else { return false }
+
+        var preferences = userPreferences
+        guard !preferences.contains(where: {
+            $0.caseInsensitiveCompare(preference) == .orderedSame
+        }) else {
+            return false
+        }
+        preferences.append(preference)
+        defaults.set(preferences, forKey: Key.userPreferences)
+        return true
     }
 }

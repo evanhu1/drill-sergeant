@@ -140,6 +140,8 @@ final class Scheduler {
             enterHappy(nextCheckMinutes: intervalMinutes)
         case .snooze:
             enterHappy(nextCheckMinutes: decision.snoozeMinutes ?? 10)
+        case .save_user_preference:
+            scheduleAngryPoll()
         }
     }
 
@@ -156,6 +158,9 @@ final class Scheduler {
         case .snooze:
             transition(to: .idle)
             scheduleNextCheck(minutes: decision.snoozeMinutes ?? 10)
+        case .save_user_preference:
+            transition(to: .idle)
+            scheduleNextCheck(minutes: intervalMinutes)
         }
     }
 

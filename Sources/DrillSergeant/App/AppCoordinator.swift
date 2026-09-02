@@ -535,6 +535,9 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         presentMessage: Bool = true
     ) {
         conversation.appendAssistant(decision)
+        if decision.tool == .save_user_preference {
+            saveUserPreference(decision.text)
+        }
         Log.info(
             "Decision: tool=\(decision.tool.rawValue), "
                 + "snooze=\(decision.snoozeMinutes.map(String.init) ?? "none")"
@@ -586,6 +589,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
             stateAge: max(0, now.timeIntervalSince(scheduler.stateChangedAt)),
             window: window,
             lastUserMessage: conversation?.lastUserMessage,
+            userPreferences: settings.userPreferences,
             now: now,
             reason: reason
         )
@@ -624,6 +628,18 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
 
     private var idleDecision: Decision {
         Decision(tool: .set_idle, snoozeMinutes: nil, message: "")
+    }
+
+    private func saveUserPreference(_ text: String?) {
+        guard let text else {
+            Log.warn("save_user_preference was called without text")
+            return
+        }
+        if settings.saveUserPreference(text) {
+            Log.info("Saved user preference")
+        } else {
+            Log.info("Ignored blank or duplicate user preference")
+        }
     }
 
     private func showDeveloperToolbar() {
