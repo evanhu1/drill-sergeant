@@ -897,3 +897,69 @@ The judging rule becomes:
 ```
 
 Everything else in the system prompt is unchanged.
+
+## 19. Check traces
+
+Every model call writes a folder so a human can see exactly what the sergeant saw, what was sent,
+and what came back. On by default; `DS_TRACE=0` turns it off (`Settings.tracingEnabled`).
+
+```
+~/Library/Logs/DrillSergeant/checks/2026-09-02_04-21-05_scheduled/
+    screenshot.jpg    the exact bytes sent to the model (absent for replies)
+    prompt.txt        every message in the request, in order, in full
+    response.txt      raw model output, parsed decision, timing
+```
+
+Folder name: `yyyy-MM-dd_HH-mm-ss` in local time, then `_` and the reason
+(`scheduled`, `angryPoll`, `manual`, `onboarding`, `reply`). Add `-2`, `-3` … on collision.
+
+`prompt.txt`:
+
+```
+check: scheduled
+time: 2026-09-02 04:21:05
+model: qwen3-vl:8b
+state: watching (for 2s), previous idle
+capture: window "Arc" 1280x803, 116 KB
+active window: Arc — “Week of September 7, 2026”
+
+--- message 1 · system
+<the full system prompt>
+
+--- message 2 · user · [image: screenshot.jpg]
+<the full user turn>
+
+--- message 3 · assistant
+<the full assistant turn>
+```
+
+Images are never inlined as base64; the placeholder names the file instead. A reply trace says
+`capture: none (reply)` and has no image placeholder.
+
+`response.txt`:
+
+```
+latency: 4.12s
+field: message.thinking
+eval_count: 30
+done_reason: stop
+
+--- raw
+{"tool": "set_angry", "message": "Close it and get back to work."}
+
+--- parsed
+tool: set_angry
+snooze_minutes: none
+message: Close it and get back to work.
+```
+
+When the call fails, `response.txt` holds `error: <description>` and whatever was received.
+
+`OllamaDecisionResult` gains `rawContent: String` (the exact text the decision was parsed from),
+`evalCount: Int?` and `doneReason: String?`, so the trace can record them.
+
+Retention: after writing, delete the oldest folders so at most 100 remain. Never log base64 or
+image bytes into `app.log`.
+
+`DevActions` gains `func openTraceFolder()`, wired to a **Traces** section in the developer
+toolbar with an "Open trace folder" button that reveals the directory in Finder.
