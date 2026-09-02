@@ -43,7 +43,7 @@ final class SchedulerTests: XCTestCase {
 
         scheduler.apply(Decision(tool: .set_idle, snoozeMinutes: nil, message: "Good."))
         XCTAssertEqual(scheduler.state, .happy)
-        XCTAssertEqual(scheduler.nextCheckAt, Date(timeIntervalSince1970: 630))
+        XCTAssertEqual(scheduler.nextCheckAt, Date(timeIntervalSince1970: 610))
 
         clock.advance(by: 30)
         XCTAssertEqual(scheduler.state, .idle)
@@ -114,7 +114,7 @@ final class SchedulerTests: XCTestCase {
 
         scheduler.debugTransition(to: .idle)
         XCTAssertEqual(scheduler.state, .happy)
-        XCTAssertEqual(scheduler.nextCheckAt, Date(timeIntervalSince1970: 630))
+        XCTAssertEqual(scheduler.nextCheckAt, Date(timeIntervalSince1970: 610))
         clock.advance(by: 30)
         XCTAssertEqual(scheduler.state, .idle)
 
@@ -124,12 +124,12 @@ final class SchedulerTests: XCTestCase {
 
         scheduler.debugTransition(to: .idle)
         XCTAssertEqual(scheduler.state, .idle)
-        XCTAssertEqual(scheduler.nextCheckAt, Date(timeIntervalSince1970: 660))
+        XCTAssertEqual(scheduler.nextCheckAt, Date(timeIntervalSince1970: 640))
 
         scheduler.debugTransition(to: .angry)
         scheduler.debugTransition(to: .happy)
         XCTAssertEqual(scheduler.state, .happy)
-        XCTAssertEqual(scheduler.nextCheckAt, Date(timeIntervalSince1970: 660))
+        XCTAssertEqual(scheduler.nextCheckAt, Date(timeIntervalSince1970: 640))
     }
 
     private func XCTAssertScheduled(
