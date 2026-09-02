@@ -63,10 +63,13 @@ final class OnboardingFlow {
         case .welcome:
             presentWelcome()
         case .permission:
-            beginPermissionStep()
+            if settings.screenPermissionRequestPending {
+                resumePermissionRequest()
+            } else {
+                beginPermissionStep()
+            }
         case .relaunch:
-            presentRelaunchStep()
-            confirmRelaunchNotNeeded()
+            resumePermissionRequest()
         case .test:
             beginTestStep()
         case .done:
@@ -82,6 +85,7 @@ final class OnboardingFlow {
     }
 
     private func presentWelcome() {
+        chat.affordance = .onboardingNext
         chat.show(
             "Drill Sergeant reporting. I watch your screen and shout at you when you slack "
                 + "off. Everything runs on a local AI model, and your data never leaves your Mac.",
@@ -102,7 +106,7 @@ final class OnboardingFlow {
         settings.onboardingStep = .permission
         permissionRequestAttempts = 0
         chat.show(
-            "Good. Now I need Screen Recording permission to see your screen. "
+            "Now I need Screen Recording permission to see your screen. "
                 + "Click this bubble to grant it.",
             autoHide: false
         )
@@ -115,6 +119,7 @@ final class OnboardingFlow {
     private func requestScreenPermission() {
         permissionRequestAttempts += 1
         let attempt = permissionRequestAttempts
+        settings.screenPermissionRequestPending = true
         checkTask?.cancel()
         checkTask = Task { [weak self] in
             guard let self else { return }
@@ -149,6 +154,10 @@ final class OnboardingFlow {
                     permissionNeedsRelaunch()
                     return
                 }
+                if settings.screenPermissionRequestPending {
+                    permissionRequestDidNotComplete()
+                    return
+                }
             }
         }
     }
@@ -158,6 +167,7 @@ final class OnboardingFlow {
             || settings.onboardingStep == .relaunch else { return }
         pollingTask?.cancel()
         pollingTask = nil
+        settings.screenPermissionRequestPending = false
         beginTestStep()
     }
 
@@ -169,14 +179,33 @@ final class OnboardingFlow {
         presentRelaunchStep()
     }
 
-    /// A relaunch that already happened: if capture works, move on without another click.
-    private func confirmRelaunchNotNeeded() {
+    /// Keep the bubble visible while a replacement process resolves the permission request that
+    /// caused the old process to quit. The probe decides whether to advance, ask for a restart,
+    /// or return to the permission step after a denial.
+    private func resumePermissionRequest() {
+        clearChatHandlers()
+        chat.show("Checking Screen Recording permission…", autoHide: false)
         checkTask?.cancel()
         checkTask = Task { [weak self] in
-            guard let self, await probePermission() else { return }
+            guard let self else { return }
+            if await probePermission() {
+                guard !Task.isCancelled else { return }
+                permissionIsWorking()
+                return
+            }
             guard !Task.isCancelled else { return }
-            permissionIsWorking()
+            if isPermissionGranted() {
+                settings.onboardingStep = .relaunch
+                presentRelaunchStep()
+            } else {
+                permissionRequestDidNotComplete()
+            }
         }
+    }
+
+    private func permissionRequestDidNotComplete() {
+        settings.screenPermissionRequestPending = false
+        beginPermissionStep()
     }
 
     private func presentRelaunchStep() {
@@ -193,8 +222,10 @@ final class OnboardingFlow {
     private func beginTestStep() {
         clearChatHandlers()
         settings.onboardingStep = .test
+        settings.screenPermissionRequestPending = false
         hasTriggeredTestCheck = false
         isRunningTestCheck = false
+        chat.show("Getting the screen test ready…", autoHide: false)
         startOllamaPolling()
     }
 
@@ -320,6 +351,7 @@ final class OnboardingFlow {
     private func clearChatHandlers() {
         chat.onReply = nil
         chat.onTap = nil
+        chat.affordance = .reply
     }
 
     private static func sleep(for interval: TimeInterval) async -> Bool {

@@ -509,7 +509,7 @@ final class OnboardingFlow {
 Steps:
 
 1. **welcome → goal**: `ask("Drill Sergeant reporting. I watch your screen every 10 minutes and shout when you slack off. Everything runs on a local model. Nothing leaves this Mac. First: what are you working on today?")`. On reply: save `goal`, step = `.permission`.
-2. **permission**: if `ScreenPermission.isGranted()` skip to step 4. Else `show("Good. Now I need Screen Recording permission to see your screen. Click this bubble to grant it.", autoHide: false)` with `onTap` → `ScreenPermission.request()`; if that returns false and the OS prompt did not appear (second attempt), call `openSystemSettings()`. Poll `isGranted()` every 2s. When granted: step = `.relaunch`.
+2. **permission**: if `ScreenPermission.isGranted()` skip to step 4. Else `show("Now I need Screen Recording permission to see your screen. Click this bubble to grant it.", autoHide: false)` with `onTap` → `ScreenPermission.request()`; if that returns false and the OS prompt did not appear (second attempt), call `openSystemSettings()`. Poll `isGranted()` every 2s. When granted: step = `.relaunch`.
 3. **relaunch**: `show("Permission granted. I have to restart to use it. Click here to restart.", autoHide: false)`, `onTap` → `relaunch()`. On next launch this step is skipped straight to `.test` because permission is granted (check `isGranted()` at start; if `.relaunch` and granted → `.test`).
 4. **test**: first verify Ollama: if not reachable or model missing, `show("I can't reach Ollama or the model {model} is missing. Run install.sh again, or `ollama pull {model}`. I'll keep checking.", autoHide: false)` and retry every 10s. When ready: `show("Let's test it. Open YouTube. I'm watching.", autoHide: false)`, `scheduler.enterWatching()`. Poll `ActiveWindowInspector.current().looksLikeYouTube` every 2s (also accept the user replying "done"). On detection: `runCheck(.onboarding)` → scheduler.apply. Expect angry; the normal angry poll then takes over. When the scheduler reaches `.happy` (or `.idle` if the model was lenient), `show("That's how it works. Now back to: {goal}. Next check in {interval} minutes.", autoHide: true)`, step = `.done`, `onFinished?()`.
 
@@ -1084,3 +1084,29 @@ User preferences (saved forever):
 
 The reply prompt includes the same section so the model can avoid saving duplicate rules.
 Successful check traces include the parsed `text` argument alongside the existing decision fields.
+
+## 25. Permission relaunch continuity
+
+Before invoking the system Screen Recording request, persist
+`Settings.screenPermissionRequestPending` (`ds.screenPermissionRequestPending`). macOS can quit
+the process directly from its permission UI, before the normal polling loop records `.relaunch`.
+
+On the replacement launch, show `Checking Screen Recording permission…` immediately so the bubble
+and pinned tray are visible while `ScreenPermission.probe()` resolves. A successful onboarding
+probe advances to `.test`; a successful post-onboarding probe resumes the scheduler and briefly
+shows `Permission granted. I'm back on watch.` A denied request returns to the permission prompt.
+If preflight says the grant exists but the probe still fails, retain the restart action.
+
+The `.test` step also presents `Getting the screen test ready…` before checking Ollama, so every
+persisted onboarding state has visible UI synchronously at launch. Relaunches must not inherit the
+one-shot `DS_RESET_ONBOARDING` override.
+
+## 26. Welcome onboarding affordance
+
+The welcome bubble uses a dedicated `BubbleAffordance.onboardingNext` state. In that state, the
+bottom-right hint reads `Next →`, is always visible, uses dark ink at 72% opacity, and does not
+lighten on hover. The standard `reply ←` affordance remains hover-only everywhere else. Advancing
+from welcome resets the affordance to `.reply`.
+
+The permission message begins `Now I need Screen Recording permission…`; it does not begin with
+`Good.` The state renderer includes `bubble-onboarding.png` for the dedicated welcome treatment.

@@ -6,6 +6,7 @@ final class BubbleModel: ObservableObject {
     @Published private(set) var isInputOpen = false
     @Published var replyText = ""
     @Published var isHovered = false
+    @Published var affordance: BubbleAffordance = .reply
     /// Set while an auto-hide is pending, so the close button can show time left.
     @Published private(set) var countdown: BubbleCountdown?
 
@@ -145,26 +146,43 @@ struct BubbleView: View {
                 .padding(9)
         }
         .overlay(alignment: .bottomTrailing) {
-            replyHint
+            actionHint
         }
         .animation(.easeInOut(duration: 0.2), value: model.isInputOpen)
     }
 
     /// Sits in the bubble's bottom margin, right side. It never affects layout.
-    private var replyHint: some View {
-        Text("reply ←")
+    private var actionHint: some View {
+        Text(actionHintText)
             .font(BubbleStyle.hintFont)
-            .foregroundStyle(BubbleStyle.muted)
+            .foregroundStyle(actionHintColor)
             .padding(.trailing, 16)
             .padding(.bottom, 5)
-            .opacity(showsReplyHint ? 1 : 0)
+            .opacity(showsActionHint ? 1 : 0)
             .allowsHitTesting(false)
             .accessibilityHidden(true)
     }
 
-    private var showsReplyHint: Bool {
+    private var actionHintText: String {
+        switch model.affordance {
+        case .reply: return "reply ←"
+        case .onboardingNext: return "Next →"
+        }
+    }
+
+    private var actionHintColor: Color {
+        switch model.affordance {
+        case .reply: return BubbleStyle.muted
+        case .onboardingNext: return BubbleStyle.ink.opacity(0.72)
+        }
+    }
+
+    private var showsActionHint: Bool {
         guard !model.isInputOpen else { return false }
-        return staticHover ?? model.isHovered
+        switch model.affordance {
+        case .reply: return staticHover ?? model.isHovered
+        case .onboardingNext: return true
+        }
     }
 
     private var closeButton: some View {

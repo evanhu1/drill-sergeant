@@ -9,6 +9,7 @@ final class Settings {
         static let intervalMinutes = "ds.intervalMinutes"
         static let onboardingStep = "ds.onboardingStep"
         static let ollamaBaseURL = "ds.ollamaBaseURL"
+        static let screenPermissionRequestPending = "ds.screenPermissionRequestPending"
         static let userPreferences = "ds.userPreferences"
         static let retiredSetting = String(
             decoding: [100, 115, 46, 103, 111, 97, 108],
@@ -80,6 +81,11 @@ final class Settings {
 
     var tracingEnabled: Bool {
         environment["DS_TRACE"] != "0"
+    }
+
+    var screenPermissionRequestPending: Bool {
+        get { defaults.bool(forKey: Key.screenPermissionRequestPending) }
+        set { defaults.set(newValue, forKey: Key.screenPermissionRequestPending) }
     }
 
     var userPreferences: [String] {

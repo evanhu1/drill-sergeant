@@ -34,6 +34,11 @@ final class BubbleWindow: NSPanel, ChatPresenter {
         didSet { model.onTap = onTap }
     }
 
+    var affordance: BubbleAffordance {
+        get { model.affordance }
+        set { model.affordance = newValue }
+    }
+
     var isReplying: Bool { model.isInputOpen }
 
     override var canBecomeKey: Bool { true }

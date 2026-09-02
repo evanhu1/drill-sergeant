@@ -12,6 +12,7 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(settings.intervalMinutes, 10)
         XCTAssertEqual(settings.onboardingStep, .welcome)
         XCTAssertEqual(settings.ollamaBaseURL.absoluteString, "http://127.0.0.1:11434")
+        XCTAssertFalse(settings.screenPermissionRequestPending)
         XCTAssertEqual(settings.userPreferences, [])
         XCTAssertTrue(settings.tracingEnabled)
 
@@ -19,6 +20,7 @@ final class SettingsTests: XCTestCase {
         settings.intervalMinutes = 15
         settings.onboardingStep = .test
         settings.ollamaBaseURL = URL(string: "http://localhost:9999")!
+        settings.screenPermissionRequestPending = true
         XCTAssertTrue(settings.saveUserPreference("YouTube tutorials count as work."))
         XCTAssertFalse(settings.saveUserPreference("youtube tutorials count as work."))
         XCTAssertFalse(settings.saveUserPreference("   "))
@@ -28,6 +30,7 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(reloaded.intervalMinutes, 15)
         XCTAssertEqual(reloaded.onboardingStep, .test)
         XCTAssertEqual(reloaded.ollamaBaseURL.absoluteString, "http://localhost:9999")
+        XCTAssertTrue(reloaded.screenPermissionRequestPending)
         XCTAssertEqual(reloaded.userPreferences, ["YouTube tutorials count as work."])
     }
 

@@ -1,3 +1,8 @@
+enum BubbleAffordance: Equatable {
+    case reply
+    case onboardingNext
+}
+
 @MainActor
 protocol ChatPresenter: AnyObject {
     /// Show a message bubble under the notch.
@@ -13,4 +18,6 @@ protocol ChatPresenter: AnyObject {
     var onReply: ((String) -> Void)? { get set }
     /// Called when the user clicks the bubble body.
     var onTap: (() -> Void)? { get set }
+    /// Controls the quiet action label in the bubble's bottom-right margin.
+    var affordance: BubbleAffordance { get set }
 }

@@ -127,6 +127,15 @@ enum StateRenderer {
             outputURL: outputURL,
             rendered: &rendered
         )
+        try renderBubble(
+            name: "bubble-onboarding.png",
+            text: "Drill Sergeant reporting. I watch your screen and shout at you when you slack off.",
+            inputOpen: false,
+            affordance: .onboardingNext,
+            size: bubbleInputSize,
+            outputURL: outputURL,
+            rendered: &rendered
+        )
 
         let sheet = try makeSheet(rendered)
         try writePNG(sheet, to: outputURL.appendingPathComponent("sheet.png"))
@@ -169,14 +178,17 @@ enum StateRenderer {
 
     private static func renderBubble(
         name: String,
+        text: String = "Close YouTube now.\nGet back to your essay.",
         inputOpen: Bool,
         countdown: Double? = nil,
+        affordance: BubbleAffordance = .reply,
         size: CGSize,
         outputURL: URL,
         rendered: inout [(name: String, image: NSImage)]
     ) throws {
         let model = BubbleModel()
-        model.replaceText("Close YouTube now.\nGet back to your essay.")
+        model.replaceText(text)
+        model.affordance = affordance
         if inputOpen {
             model.openInput()
             model.replyText = "I'm researching for the essay."

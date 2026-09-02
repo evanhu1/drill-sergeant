@@ -88,7 +88,11 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
 
         if settings.onboardingStep == .done {
             installReplyHandler()
-            scheduler.start()
+            if settings.screenPermissionRequestPending {
+                resumeAfterScreenPermissionRequest()
+            } else {
+                scheduler.start()
+            }
         } else {
             startOnboarding(chat: chat, scheduler: scheduler, ollama: ollama)
         }
@@ -112,6 +116,9 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         }
 
         do {
+            var environment = ProcessInfo.processInfo.environment
+            environment.removeValue(forKey: "DS_RESET_ONBOARDING")
+            process.environment = environment
             try process.run()
             Log.info("Started replacement process for relaunch")
             Task { @MainActor in
@@ -614,6 +621,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         )
         chat?.onTap = { [weak self] in
             guard let self else { return }
+            settings.screenPermissionRequestPending = true
             if ScreenPermission.request() || ScreenPermission.isGranted() {
                 chat?.show(
                     "Permission granted. Click here to restart me.",
@@ -621,7 +629,28 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
                 )
                 chat?.onTap = { [weak self] in self?.relaunch() }
             } else {
+                settings.screenPermissionRequestPending = false
                 ScreenPermission.openSystemSettings()
+            }
+        }
+    }
+
+    private func resumeAfterScreenPermissionRequest() {
+        chat?.onTap = nil
+        chat?.show("Checking Screen Recording permission…", autoHide: false)
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            if await ScreenPermission.probe() {
+                settings.screenPermissionRequestPending = false
+                scheduler?.start()
+                chat?.show("Permission granted. I'm back on watch.", autoHide: true)
+            } else if ScreenPermission.isGranted() {
+                chat?.show("Permission granted. Click here to restart me.", autoHide: false)
+                chat?.onTap = { [weak self] in self?.relaunch() }
+            } else {
+                settings.screenPermissionRequestPending = false
+                scheduler?.start()
+                presentPermissionRequest()
             }
         }
     }

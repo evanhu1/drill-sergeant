@@ -21,6 +21,7 @@ final class OnboardingFlowTests: XCTestCase {
                 + "off. Everything runs on a local AI model, and your data never leaves your Mac."
         )
         XCTAssertEqual(chat.lastShown?.autoHide, false)
+        XCTAssertEqual(chat.affordance, .onboardingNext)
         XCTAssertTrue(chat.askedMessages.isEmpty)
         XCTAssertNil(chat.onReply)
         XCTAssertNotNil(chat.onTap)
@@ -29,7 +30,9 @@ final class OnboardingFlowTests: XCTestCase {
         chat.onTap?()
 
         XCTAssertEqual(settings.onboardingStep, .permission)
+        XCTAssertEqual(chat.affordance, .reply)
         XCTAssertTrue(chat.shownMessages.contains { $0.text.contains("Screen Recording") })
+        XCTAssertFalse(chat.lastShown?.text.hasPrefix("Good.") ?? true)
         XCTAssertEqual(
             defaults.persistentDomain(forName: suiteName) as? [String: String],
             ["ds.onboardingStep": OnboardingStep.permission.rawValue]
@@ -116,7 +119,75 @@ final class OnboardingFlowTests: XCTestCase {
         chat.onTap?()
 
         await waitUntil { settings.onboardingStep == .relaunch }
+        XCTAssertTrue(settings.screenPermissionRequestPending)
         XCTAssertTrue(chat.shownMessages.contains { $0.text.contains("restart") })
+    }
+
+    func testPermissionRequestPersistsResumePointBeforeCallingSystemAPI() async {
+        let (settings, defaults, suiteName) = makeSettings()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        settings.onboardingStep = .permission
+        let chat = FakeChatPresenter()
+        let flow = makeFlow(
+            chat: chat,
+            scheduler: Scheduler(clock: TestClock()),
+            settings: settings
+        )
+        flow.probePermission = { false }
+        flow.requestPermission = {
+            XCTAssertTrue(settings.screenPermissionRequestPending)
+            return true
+        }
+        flow.isPermissionGranted = { true }
+        flow.pollInterval = 0.001
+
+        flow.start()
+        chat.onTap?()
+
+        await waitUntil { settings.onboardingStep == .relaunch }
+    }
+
+    func testPendingPermissionRequestResumesAndAdvancesAfterSystemRelaunch() async {
+        let (settings, defaults, suiteName) = makeSettings()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        settings.onboardingStep = .permission
+        settings.screenPermissionRequestPending = true
+        let chat = FakeChatPresenter()
+        let flow = makeFlow(
+            chat: chat,
+            scheduler: Scheduler(clock: TestClock()),
+            settings: settings
+        )
+        flow.probePermission = { true }
+        flow.isOllamaReady = { false }
+        flow.pollInterval = 0.001
+
+        flow.start()
+
+        XCTAssertEqual(chat.lastShown?.text, "Checking Screen Recording permission…")
+        await waitUntil { settings.onboardingStep == .test }
+        XCTAssertFalse(settings.screenPermissionRequestPending)
+    }
+
+    func testPendingPermissionRequestReturnsToPermissionStepAfterDenial() async {
+        let (settings, defaults, suiteName) = makeSettings()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        settings.onboardingStep = .permission
+        settings.screenPermissionRequestPending = true
+        let chat = FakeChatPresenter()
+        let flow = makeFlow(
+            chat: chat,
+            scheduler: Scheduler(clock: TestClock()),
+            settings: settings
+        )
+        flow.probePermission = { false }
+        flow.isPermissionGranted = { false }
+
+        flow.start()
+
+        await waitUntil { !settings.screenPermissionRequestPending }
+        XCTAssertEqual(settings.onboardingStep, .permission)
+        XCTAssertTrue(chat.shownMessages.contains { $0.text.contains("Click this bubble") })
     }
 
     func testRelaunchStepMovesOnOnceCaptureWorks() async {
@@ -256,6 +327,7 @@ private final class FakeChatPresenter: ChatPresenter {
 
     var onReply: ((String) -> Void)?
     var onTap: (() -> Void)?
+    var affordance: BubbleAffordance = .reply
     private(set) var shownMessages: [ShownMessage] = []
     private(set) var askedMessages: [String] = []
     private(set) var hideCount = 0
