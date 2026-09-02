@@ -623,3 +623,103 @@ and also append to `~/Library/Logs/DrillSergeant/app.log` (rotate at 5 MB). Neve
 
 Multiple displays at once, browser URL extraction, menu bar icon, settings window, launch at login,
 notarization, non-notch UI polish beyond the synthetic notch fallback, Intel Macs.
+
+---
+
+## 14. V1.1 amendments
+
+### 14.1 Notch tray auto-hide (amends 5.2)
+
+The hanging part of the notch panel (the "tray") has two positions:
+
+- `extended`: as today, eyes visible below the notch.
+- `hidden`: the tray is translated up by `panelHeight` so it sits inside the notch rect and is
+  invisible. Content is clipped to the notch rect while hidden so nothing bleeds onto the menu bar.
+  On screens without a physical notch the synthetic notch stays drawn; only the tray moves.
+
+Rules (owned by `NotchWindow`, which observes `EyesModel.state`):
+- Tray is `extended` whenever state is `watching`, `angry`, or `happy`.
+- When state becomes `idle`, start a 5s timer. If still idle when it fires, and the tray is not
+  pinned and the mouse is not over the panel, slide to `hidden`.
+- Any transition out of `idle` cancels the timer and extends immediately.
+- Mouse hover over the panel frame extends the tray; leaving restarts the 5s timer if idle.
+- `func setTrayPinned(_ pinned: Bool)`: while pinned (the chat bubble is visible), the tray stays
+  extended. Unpinning restarts the 5s timer if idle.
+- `func setTrayExtended(_ extended: Bool, animated: Bool = true)` for dev tools.
+- Animation: `.easeInOut(duration: 0.3)`. The window frame does not change; only the content
+  offset animates, so right-click still works on the notch area while hidden.
+
+`BubbleWindow` gains `var onVisibilityChange: ((Bool) -> Void)?` fired when the bubble is shown or
+fully hidden. `AppCoordinator` wires it to `notchWindow.setTrayPinned`.
+
+### 14.2 Bubble close button (amends 6.2)
+
+A small circular close button (14pt, `xmark` SF Symbol at 8pt, secondary label color at 60%,
+100% on hover) sits in the bubble's top-right corner, 8pt inset. Clicking it calls `hide()`,
+closes the reply input, cancels auto-hide, and does not change companion state. It is always
+visible while the bubble is showing. The hover hint `reply ←` stays bottom-left.
+
+### 14.3 Developer toolbar
+
+Opened from the notch right-click menu item **Developer…** (always present in V1) or at launch with
+`DS_DEV=1`. It is a standard titled floating `NSPanel` (`.utilityWindow`, `.titled`, `.closable`,
+level `.floating`), 360pt wide, hosting a SwiftUI form. `App/DevToolbar.swift` +
+`App/DevToolbarView.swift`. It talks to `AppCoordinator` through a small facade protocol so the
+view is testable:
+
+```swift
+@MainActor
+protocol DevActions: AnyObject {
+    var statusText: String { get }             // "state=angry (12s) · next check 4:32 PM · goal=… · model=…"
+    var lastDecisionText: String { get }       // "set_angry — 'Close X…' (8.4s, field=thinking)"
+    func forceState(_ state: CompanionState)   // via Scheduler.debugTransition(to:)
+    func showTestMessage(_ text: String, autoHide: Bool)  // chat.show
+    func sendReply(_ text: String)             // real LLM reply flow (same as typing in the bubble)
+    func runCheck()                            // real screenshot + LLM flow (scheduler.checkNow)
+    func captureOnly() async -> String         // screenshot only; saves ~/Library/Logs/DrillSergeant/last-capture.jpg; returns "1280x827, 190 KB, Arc — “…”"
+    func resetOnboarding()                     // step=.welcome, goal="", conversation.reset(), stop scheduler, start OnboardingFlow in place (no relaunch)
+    func skipOnboarding()                      // step=.done, start scheduler
+    func setTrayExtended(_ extended: Bool)
+    func renderStates() async -> URL           // see 14.4; returns output folder, then opens it in Finder
+}
+```
+
+Sections in the form, top to bottom:
+1. **Status** — two lines, refreshed every second.
+2. **State** — four buttons: Idle, Watching, Angry, Happy. Toggle: "Tray extended".
+3. **Receive message** — text field (default "Close YouTube and get back to work."), toggle
+   "auto-hide", button "Show".
+4. **Send message** — text field (default "I'm researching for the essay, give me 10 min"),
+   button "Send to model". Shows `…` in the bubble until the model answers (existing behavior).
+5. **Screenshot flow** — buttons "Run check (screenshot + model)" and "Capture only"; the capture
+   result string appears under the buttons.
+6. **Onboarding** — buttons "Reset & start", "Skip".
+7. **Renders** — button "Render all states" → opens the folder.
+
+`Scheduler.debugTransition(to:)`: cancels timers, then: `.idle` → behaves like `apply(set_idle)`;
+`.watching` → `enterWatching()`; `.angry` → behaves like `apply(set_angry)` (starts the 30s poll);
+`.happy` → happy for 30s then idle, next check in `intervalMinutes`.
+
+### 14.4 State renders
+
+`DrillSergeant --render-states [outputDir]` (default `build/renders`) renders PNGs without showing
+any window and exits 0. Also callable from the toolbar. Uses SwiftUI `ImageRenderer` at 3x scale
+on the same view the notch window hosts (`NotchPanelContent`) with a fixed synthetic geometry
+(notch 200×32, panel 34) so renders are deterministic:
+
+| File | Content |
+|---|---|
+| `idle.png` | idle, eyes open |
+| `idle-blink.png` | idle, mid-blink |
+| `watching.png` | watching, gaze (0.6, -0.3) |
+| `angry.png` | angry, gaze (-0.4, 0.2) |
+| `happy.png` | happy |
+| `tray-hidden.png` | idle with the tray hidden |
+| `bubble.png` | the bubble view with a two-line message, hover hint visible, close button |
+| `bubble-input.png` | the bubble with the reply input open |
+| `sheet.png` | all of the above tiled in a grid on a mid-gray background with filename labels |
+
+Render on a mid-gray (`#808080`) background behind the panel so the black shape's edges are visible.
+The views must expose whatever static inputs they need (blink progress, gaze, hover) as plain
+parameters or model fields so the renderer can set them without timers. Animations are not
+started in render mode.
