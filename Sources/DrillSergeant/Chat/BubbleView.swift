@@ -118,18 +118,11 @@ struct BubbleView: View {
             if model.isInputOpen {
                 replyField
                     .transition(.opacity.combined(with: .move(edge: .top)))
-            } else {
-                Text("reply ←")
-                    .font(BubbleStyle.hintFont)
-                    .foregroundStyle(BubbleStyle.muted)
-                    .opacity((staticHover ?? model.isHovered) ? 1 : 0)
-                    .frame(height: 14, alignment: .leading)
-                    .accessibilityHidden(true)
             }
         }
         .padding(.horizontal, 18)
         .padding(.top, 14)
-        .padding(.bottom, 12)
+        .padding(.bottom, model.isInputOpen ? 12 : BubbleStyle.hintGutter)
         .background {
             RoundedRectangle(cornerRadius: BubbleStyle.cornerRadius, style: .continuous)
                 .fill(BubbleStyle.surface)
@@ -140,7 +133,27 @@ struct BubbleView: View {
             closeButton
                 .padding(9)
         }
+        .overlay(alignment: .bottomTrailing) {
+            replyHint
+        }
         .animation(.easeInOut(duration: 0.2), value: model.isInputOpen)
+    }
+
+    /// Sits in the bubble's bottom margin, right side. It never affects layout.
+    private var replyHint: some View {
+        Text("reply ←")
+            .font(BubbleStyle.hintFont)
+            .foregroundStyle(BubbleStyle.muted)
+            .padding(.trailing, 16)
+            .padding(.bottom, 5)
+            .opacity(showsReplyHint ? 1 : 0)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    private var showsReplyHint: Bool {
+        guard !model.isInputOpen else { return false }
+        return staticHover ?? model.isHovered
     }
 
     private var closeButton: some View {
@@ -222,6 +235,8 @@ private enum BubbleStyle {
     /// Room around the bubble for its shadow; the window is this much wider on each side.
     static let outerPadding: CGFloat = 16
     static let cornerRadius: CGFloat = 20
+    /// Bottom margin kept clear for the reply hint when the input is closed.
+    static let hintGutter: CGFloat = 22
     static let tailWidth: CGFloat = 26
     static let tailHeight: CGFloat = 12
 

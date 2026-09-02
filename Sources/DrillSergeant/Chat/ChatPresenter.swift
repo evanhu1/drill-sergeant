@@ -3,7 +3,8 @@ protocol ChatPresenter: AnyObject {
     /// Show a message bubble under the notch.
     func show(_ text: String, autoHide: Bool)
 
-    /// Show a message and immediately open the reply text field.
+    /// Show a message that expects a reply. The bubble stays up until it is answered or closed;
+    /// the reply field opens only when the user clicks the bubble.
     func ask(_ text: String)
 
     func hide()

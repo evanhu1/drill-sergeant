@@ -436,7 +436,7 @@ stop otherwise.
 protocol ChatPresenter: AnyObject {
     /// Show a message bubble under the notch. `autoHide`: hide after 20s (idle/happy) or stay (angry/onboarding).
     func show(_ text: String, autoHide: Bool)
-    /// Show a message and immediately open the reply text field.
+    /// Show a message that expects a reply. The reply field opens only on click (see 16).
     func ask(_ text: String)
     func hide()
     /// Called when the user submits a reply.
@@ -454,7 +454,7 @@ protocol ChatPresenter: AnyObject {
 - Position: horizontally centered under the notch panel, 8pt gap below the panel's bottom edge.
 - Look: dark bubble `#1C1C1E` at 96% opacity, corner radius 16, 1pt border white@10%,
   white 13pt system text, small upward-pointing triangle tail toward the notch.
-- Hover: a hint appears bottom-left inside the bubble: `reply ←` in 11pt secondary label color.
+- Hover: a hint appears in the bubble's bottom margin, right side: `reply ←` (see 16).
 - Click (anywhere on the bubble, not the input): if `onTap` is set, call it; otherwise open the
   reply input under the text: an `NSTextField`-style single-line input (SwiftUI `TextField`),
   placeholder "Talk back…", Return submits → `onReply(text)`, Esc closes the input.
@@ -761,3 +761,13 @@ States:
 
 Renders (14.4): add `angry-gaze-left.png` (gaze (-0.8, 0.1)) and `idle-gaze-down.png`
 (gaze (0.3, 0.9)) so lid clipping and travel limits can be checked.
+
+## 16. Bubble reply affordance (amends 6.1, 6.2, 14.2)
+
+The reply field is never shown by default, not even for `ask()`. Every bubble opens as text only.
+Clicking the bubble body opens the field (unless `onTap` is set, which still takes precedence).
+Submitting or pressing Esc closes it again.
+
+The `reply ←` hint sits in the bubble's bottom margin at the right side, as an overlay that never
+affects layout. It fades in on hover and is hidden whenever the input is open. The bubble keeps a
+22pt bottom margin while the input is closed to hold it, and 12pt while the input is open.

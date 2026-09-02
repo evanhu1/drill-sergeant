@@ -79,7 +79,6 @@ final class BubbleWindow: NSPanel, ChatPresenter {
         autoHideEnabled = false
         cancelAutoHide()
         presentIfNeeded()
-        model.openInput()
     }
 
     func hide() {
