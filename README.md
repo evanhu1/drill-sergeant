@@ -8,7 +8,7 @@ you get back to work.
 ## Install
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/evanhu/drill-sergeant/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/evanhu1/drill-sergeant/main/install.sh | bash
 ```
 
 Follow the chat bubble after the app opens. The installer sets up Ollama and downloads the local
