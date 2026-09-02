@@ -100,6 +100,38 @@ final class SchedulerTests: XCTestCase {
         XCTAssertTrue(delegate.requests.isEmpty)
     }
 
+    func testDebugTransitionsUseNormalStateTimers() {
+        let clock = TestClock()
+        let scheduler = Scheduler(clock: clock)
+        let delegate = SchedulerDelegateSpy()
+        scheduler.delegate = delegate
+
+        scheduler.debugTransition(to: .angry)
+        XCTAssertEqual(scheduler.state, .angry)
+        clock.advance(by: 30)
+        XCTAssertEqual(delegate.requests.count, 1)
+        XCTAssertAngryPoll(delegate.requests[0])
+
+        scheduler.debugTransition(to: .idle)
+        XCTAssertEqual(scheduler.state, .happy)
+        XCTAssertEqual(scheduler.nextCheckAt, Date(timeIntervalSince1970: 630))
+        clock.advance(by: 30)
+        XCTAssertEqual(scheduler.state, .idle)
+
+        scheduler.debugTransition(to: .watching)
+        XCTAssertEqual(scheduler.state, .watching)
+        XCTAssertNil(scheduler.nextCheckAt)
+
+        scheduler.debugTransition(to: .idle)
+        XCTAssertEqual(scheduler.state, .idle)
+        XCTAssertEqual(scheduler.nextCheckAt, Date(timeIntervalSince1970: 660))
+
+        scheduler.debugTransition(to: .angry)
+        scheduler.debugTransition(to: .happy)
+        XCTAssertEqual(scheduler.state, .happy)
+        XCTAssertEqual(scheduler.nextCheckAt, Date(timeIntervalSince1970: 660))
+    }
+
     private func XCTAssertScheduled(
         _ reason: CheckReason,
         file: StaticString = #filePath,

@@ -8,6 +8,7 @@ final class NotchWindow: NSPanel {
 
     var onSetGoal: (() -> Void)?
     var onCheckNow: (() -> Void)?
+    var onDeveloper: (() -> Void)?
     var onQuit: (() -> Void)?
 
     private let eyesModel: EyesModel
@@ -163,6 +164,9 @@ final class NotchWindow: NSPanel {
         menu.addItem(
             menuItem(title: "Check now", action: #selector(checkNow(_:)))
         )
+        menu.addItem(
+            menuItem(title: "Developer…", action: #selector(showDeveloper(_:)))
+        )
         menu.addItem(.separator())
 
         let quitItem = menuItem(
@@ -187,6 +191,10 @@ final class NotchWindow: NSPanel {
 
     @objc private func checkNow(_ sender: NSMenuItem) {
         onCheckNow?()
+    }
+
+    @objc private func showDeveloper(_ sender: NSMenuItem) {
+        onDeveloper?()
     }
 
     @objc private func quit(_ sender: NSMenuItem) {
@@ -226,7 +234,11 @@ struct NotchPanelContent: View {
     @ObservedObject var model: EyesModel
     let notchHeight: CGFloat
     let panelHeight: CGFloat
-    let trayOffset: CGFloat
+    /// 0 = tray extended, `panelHeight` = tray hidden inside the notch.
+    var trayOffset: CGFloat = 0
+    var blinkProgress: CGFloat? = nil
+    var gaze: CGPoint? = nil
+    var animationsEnabled = true
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -241,8 +253,13 @@ struct NotchPanelContent: View {
                 .fill(.black)
                 .frame(height: panelHeight)
 
-                EyesView(model: model)
-                    .frame(height: panelHeight)
+                EyesView(
+                    model: model,
+                    blinkProgress: blinkProgress,
+                    gaze: gaze,
+                    animationsEnabled: animationsEnabled
+                )
+                .frame(height: panelHeight)
             }
             .frame(height: panelHeight)
             .offset(y: notchHeight - trayOffset)

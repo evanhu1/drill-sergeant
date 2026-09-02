@@ -53,9 +53,26 @@ final class BubbleModel: ObservableObject {
 struct BubbleView: View {
     @ObservedObject var model: BubbleModel
     let onHeightChange: (CGFloat) -> Void
+    var staticHover: Bool? = nil
+    var autoFocusInput = true
+    var staticReplyText: String? = nil
 
     @FocusState private var isReplyFocused: Bool
     @State private var isCloseHovered = false
+
+    init(
+        model: BubbleModel,
+        staticHover: Bool? = nil,
+        autoFocusInput: Bool = true,
+        staticReplyText: String? = nil,
+        onHeightChange: @escaping (CGFloat) -> Void
+    ) {
+        self.model = model
+        self.staticHover = staticHover
+        self.autoFocusInput = autoFocusInput
+        self.staticReplyText = staticReplyText
+        self.onHeightChange = onHeightChange
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -102,7 +119,7 @@ struct BubbleView: View {
                 Text("reply ←")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
-                    .opacity(model.isHovered ? 1 : 0)
+                    .opacity((staticHover ?? model.isHovered) ? 1 : 0)
                     .frame(height: 18, alignment: .leading)
                     .accessibilityHidden(true)
             }
@@ -158,9 +175,26 @@ struct BubbleView: View {
         model.handleTap()
     }
 
+    @ViewBuilder
     private var replyField: some View {
-        TextField("Talk back…", text: $model.replyText)
-            .textFieldStyle(.plain)
+        Group {
+            if let staticReplyText {
+                Text(staticReplyText.isEmpty ? "Talk back…" : staticReplyText)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                TextField("Talk back…", text: $model.replyText)
+                    .textFieldStyle(.plain)
+                    .focused($isReplyFocused)
+                    .onSubmit {
+                        model.submitReply()
+                    }
+                    .onAppear {
+                        if autoFocusInput {
+                            isReplyFocused = true
+                        }
+                    }
+            }
+        }
             .font(.system(size: 13))
             .foregroundStyle(.white)
             .padding(.horizontal, 10)
@@ -172,13 +206,6 @@ struct BubbleView: View {
                         RoundedRectangle(cornerRadius: 7, style: .continuous)
                             .stroke(.white.opacity(0.14), lineWidth: 1)
                     }
-            }
-            .focused($isReplyFocused)
-            .onSubmit {
-                model.submitReply()
-            }
-            .onAppear {
-                isReplyFocused = true
             }
     }
 

@@ -2,7 +2,7 @@ import AppKit
 import Foundation
 
 @MainActor
-final class AppCoordinator: SchedulerDelegate {
+final class AppCoordinator: SchedulerDelegate, DevActions {
     private let settings: Settings
 
     private var eyesModel: EyesModel?
@@ -13,7 +13,9 @@ final class AppCoordinator: SchedulerDelegate {
     private var conversation: Conversation?
     private var cursorTracker: CursorTracker?
     private var onboarding: OnboardingFlow?
+    private var devToolbar: DevToolbar?
     private var pendingWork: Task<Void, Never>?
+    private var lastDecision: OllamaDecisionResult?
     private var pendingReplyCount = 0
     private var hasStarted = false
 
@@ -56,9 +58,14 @@ final class AppCoordinator: SchedulerDelegate {
         scheduler.delegate = self
         notchWindow.onSetGoal = { [weak self] in self?.promptForGoal() }
         notchWindow.onCheckNow = { [weak self] in self?.checkNow() }
+        notchWindow.onDeveloper = { [weak self] in self?.showDeveloperToolbar() }
         notchWindow.onQuit = { [weak self] in self?.quit() }
         chat.onVisibilityChange = { notchWindow.setTrayPinned($0) }
         notchWindow.showOnScreen()
+
+        if ProcessInfo.processInfo.environment["DS_DEV"] == "1" {
+            showDeveloperToolbar()
+        }
 
         Log.info(
             "App started; onboarding=\(settings.onboardingStep.rawValue), "
@@ -125,6 +132,111 @@ final class AppCoordinator: SchedulerDelegate {
     func quit() {
         Log.info("Quit requested")
         NSApp.terminate(nil)
+    }
+
+    var statusText: String {
+        guard let scheduler else {
+            return "state=starting · next check — · goal=\(shortGoal) · model=\(settings.model)"
+        }
+        let age = max(0, Int(Date().timeIntervalSince(scheduler.stateChangedAt)))
+        let nextCheck = scheduler.nextCheckAt.map {
+            DateFormatter.localizedString(from: $0, dateStyle: .none, timeStyle: .short)
+        } ?? "—"
+        return "state=\(scheduler.state.rawValue) (\(age)s) · next check \(nextCheck) "
+            + "· goal=\(shortGoal) · model=\(settings.model)"
+    }
+
+    var lastDecisionText: String {
+        guard let lastDecision else { return "No decision yet" }
+        let message = lastDecision.decision.message
+            .replacingOccurrences(of: "\n", with: " ")
+        return String(
+            format: "%@ — '%@' (%.1fs, field=%@)",
+            lastDecision.decision.tool.rawValue,
+            message,
+            lastDecision.latency,
+            lastDecision.sourceField
+        )
+    }
+
+    func forceState(_ state: CompanionState) {
+        scheduler?.debugTransition(to: state)
+    }
+
+    func showTestMessage(_ text: String, autoHide: Bool) {
+        chat?.onTap = nil
+        chat?.show(text, autoHide: autoHide)
+    }
+
+    func sendReply(_ text: String) {
+        submitReply(text)
+    }
+
+    func runCheck() {
+        checkNow()
+    }
+
+    func captureOnly() async -> String {
+        do {
+            let screenshot = try await ScreenCapture.capture()
+            let directory = FileManager.default.homeDirectoryForCurrentUser
+                .appendingPathComponent("Library/Logs/DrillSergeant", isDirectory: true)
+            try FileManager.default.createDirectory(
+                at: directory,
+                withIntermediateDirectories: true
+            )
+            let destination = directory.appendingPathComponent("last-capture.jpg")
+            try screenshot.jpegData.write(to: destination, options: .atomic)
+            let kilobytes = Int((Double(screenshot.jpegData.count) / 1_024).rounded())
+            let window = ActiveWindowInspector.current()
+            Log.info("Developer capture saved to \(destination.path)")
+            return "\(screenshot.width)x\(screenshot.height), \(kilobytes) KB, \(window.summary)"
+        } catch let error as ScreenCaptureError {
+            let message = "Capture failed: \(description(of: error))"
+            Log.error(message)
+            return message
+        } catch {
+            let message = "Capture failed: \(error.localizedDescription)"
+            Log.error(message)
+            return message
+        }
+    }
+
+    func resetOnboarding() {
+        settings.onboardingStep = .welcome
+        settings.goal = ""
+        conversation?.reset()
+        scheduler?.stop()
+
+        if let onboarding {
+            onboarding.start()
+        } else if let chat, let scheduler, let ollama {
+            startOnboarding(chat: chat, scheduler: scheduler, ollama: ollama)
+        }
+    }
+
+    func skipOnboarding() {
+        settings.onboardingStep = .done
+        onboarding?.start()
+        onboarding = nil
+        installReplyHandler()
+        scheduler?.start()
+    }
+
+    func setTrayExtended(_ extended: Bool) {
+        notchWindow?.setTrayExtended(extended)
+    }
+
+    func renderStates() async -> URL {
+        let outputURL = StateRenderer.defaultOutputURL
+        do {
+            let renderedURL = try StateRenderer.render(to: outputURL)
+            NSWorkspace.shared.open(renderedURL)
+            return renderedURL
+        } catch {
+            Log.error("State rendering failed: \(error.localizedDescription)")
+            return outputURL
+        }
     }
 
     func scheduler(
@@ -196,11 +308,13 @@ final class AppCoordinator: SchedulerDelegate {
     }
 
     private func submitReply(_ text: String) {
+        let reply = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !reply.isEmpty else { return }
         pendingReplyCount += 1
         chat?.onTap = nil
         chat?.show("…", autoHide: false)
         enqueueModelWork { [weak self] in
-            await self?.runReply(text)
+            await self?.runReply(reply)
         }
     }
 
@@ -318,8 +432,10 @@ final class AppCoordinator: SchedulerDelegate {
         ollama: OllamaClient
     ) async -> DecisionOutcome {
         do {
+            let result = try await ollama.decideWithMetadata(messages: messages)
+            lastDecision = result
             return DecisionOutcome(
-                decision: try await ollama.decide(messages: messages),
+                decision: result.decision,
                 errorMessage: nil
             )
         } catch let error as OllamaError {
@@ -434,6 +550,22 @@ final class AppCoordinator: SchedulerDelegate {
 
     private var idleDecision: Decision {
         Decision(tool: .set_idle, snoozeMinutes: nil, message: "")
+    }
+
+    private var shortGoal: String {
+        let goal = settings.goal.isEmpty ? "(none)" : settings.goal
+        guard goal.count > 32 else { return goal }
+        return String(goal.prefix(31)) + "…"
+    }
+
+    private func showDeveloperToolbar() {
+        if let devToolbar {
+            devToolbar.show()
+            return
+        }
+        let toolbar = DevToolbar(actions: self)
+        devToolbar = toolbar
+        toolbar.show()
     }
 
     private struct DecisionOutcome {

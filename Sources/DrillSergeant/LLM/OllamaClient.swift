@@ -13,6 +13,12 @@ enum OllamaError: Error, Equatable {
     case http(Int)
 }
 
+struct OllamaDecisionResult: Equatable {
+    let decision: Decision
+    let latency: TimeInterval
+    let sourceField: String
+}
+
 actor OllamaClient {
     var model: String
 
@@ -67,6 +73,11 @@ actor OllamaClient {
     }
 
     func decide(messages: [OllamaMessage]) async throws -> Decision {
+        try await decideWithMetadata(messages: messages).decision
+    }
+
+    /// Requests a decision and includes diagnostics used by the developer toolbar.
+    func decideWithMetadata(messages: [OllamaMessage]) async throws -> OllamaDecisionResult {
         let encodedMessages = try JSONEncoder().encode(messages)
         guard let messageObjects = try JSONSerialization.jsonObject(
             with: encodedMessages
@@ -153,7 +164,11 @@ actor OllamaClient {
         Log.info("Ollama decision source: \(details.joined(separator: ", "))")
 
         do {
-            return try Decision.parse(decisionText)
+            return OllamaDecisionResult(
+                decision: try Decision.parse(decisionText),
+                latency: elapsed,
+                sourceField: responseField
+            )
         } catch {
             throw OllamaError.badResponse(
                 "Invalid decision in message.\(responseField): \(error.localizedDescription)"

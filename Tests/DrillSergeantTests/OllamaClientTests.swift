@@ -61,12 +61,14 @@ final class OllamaClientTests: XCTestCase {
         }
         let client = makeClient()
 
-        let decision = try await client.decide(messages: [])
+        let result = try await client.decideWithMetadata(messages: [])
 
         XCTAssertEqual(
-            decision,
+            result.decision,
             Decision(tool: .set_idle, snoozeMinutes: nil, message: "Good.")
         )
+        XCTAssertEqual(result.sourceField, "thinking")
+        XCTAssertGreaterThanOrEqual(result.latency, 0)
     }
 
     func testIsReachableReturnsFalseForTransportError() async {
