@@ -61,7 +61,7 @@ To make the executable target testable, keep `main.swift` minimal (it only calls
 enum CompanionState: String, Codable, Equatable {
     case idle      // eyes relaxed, occasional blink
     case watching  // eyes follow the cursor; pre-roll before a check and during processing
-    case angry     // caught off task; eyes follow cursor with angry brows; polls every 30s
+    case angry     // caught off task; eyes follow cursor with angry brows; polls every 10s
     case happy     // shown for 30s after leaving angry; then idle
 }
 ```
@@ -74,8 +74,8 @@ Transitions (Scheduler drives these):
 | watching | capture + LLM done, decision `set_idle` | idle (next check in `intervalMinutes`) |
 | watching | decision `set_angry` | angry |
 | watching | decision `snooze(n)` | idle (next check in `n` minutes) |
-| angry | 30s poll, decision `set_angry` | angry (stay) |
-| angry | 30s poll or reply, decision `set_idle` | happy |
+| angry | 10s poll, decision `set_angry` | angry (stay) |
+| angry | 10s poll or reply, decision `set_idle` | happy |
 | angry | decision `snooze(n)` | happy (then idle, next check in `n` minutes) |
 | happy | 30s elapsed | idle |
 | any | user reply produces a decision | same rules as the row for the current state (idle/happy treated like watching) |
@@ -85,7 +85,9 @@ Rules:
 - `intervalMinutes` default 10. The timer always resets after a decision.
 - Entering `happy` from `angry` also resets the timer to `intervalMinutes` (or the snooze length).
 - The 30s pre-roll `watching` state is skipped when the remaining time is already under 30s.
-- The angry poll: every 30s capture + LLM. It never enters `watching`; eyes already track the cursor.
+- The angry poll: every 10s capture + LLM. It never enters `watching`; eyes already track the
+  cursor. The timer starts when the previous decision lands, so with a ~4s model call the real
+  cadence is ~14s.
 
 ### 2.1 Scheduler interface
 
@@ -114,7 +116,7 @@ enum CheckReason { case scheduled, angryPoll, manual, onboarding }
 @MainActor
 final class Scheduler {
     init(clock: Clock, intervalMinutes: Int = 10, preRollSeconds: TimeInterval = 30,
-         angryPollSeconds: TimeInterval = 30, happySeconds: TimeInterval = 30)
+         angryPollSeconds: TimeInterval = 10, happySeconds: TimeInterval = 30)
     weak var delegate: SchedulerDelegate?
     private(set) var state: CompanionState          // starts .idle
     private(set) var previousState: CompanionState  // starts .idle

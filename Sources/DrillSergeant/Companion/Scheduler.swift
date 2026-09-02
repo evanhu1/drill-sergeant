@@ -54,7 +54,7 @@ final class Scheduler {
         clock: Clock,
         intervalMinutes: Int = 10,
         preRollSeconds: TimeInterval = 30,
-        angryPollSeconds: TimeInterval = 30,
+        angryPollSeconds: TimeInterval = 10,
         happySeconds: TimeInterval = 30
     ) {
         self.clock = clock

@@ -37,7 +37,7 @@ final class SchedulerTests: XCTestCase {
         scheduler.apply(Decision(tool: .set_angry, snoozeMinutes: nil, message: "Move!"))
         XCTAssertEqual(scheduler.state, .angry)
 
-        clock.advance(by: 30)
+        clock.advance(by: 10)
         XCTAssertEqual(delegate.requests.count, 2)
         XCTAssertAngryPoll(delegate.requests[1])
 
@@ -108,7 +108,7 @@ final class SchedulerTests: XCTestCase {
 
         scheduler.debugTransition(to: .angry)
         XCTAssertEqual(scheduler.state, .angry)
-        clock.advance(by: 30)
+        clock.advance(by: 10)
         XCTAssertEqual(delegate.requests.count, 1)
         XCTAssertAngryPoll(delegate.requests[0])
 
