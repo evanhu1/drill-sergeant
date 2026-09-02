@@ -635,6 +635,9 @@ The hanging part of the notch panel (the "tray") has two positions:
 - `extended`: as today, eyes visible below the notch.
 - `hidden`: the tray is translated up by `panelHeight` so it sits inside the notch rect and is
   invisible. Content is clipped to the notch rect while hidden so nothing bleeds onto the menu bar.
+  The notch rect's own bottom corners round out as the tray retracts (0 extended → 9pt hidden), so
+  the hidden tray follows the hardware notch's curve instead of leaving square black corners beside
+  it.
   On screens without a physical notch the synthetic notch stays drawn; only the tray moves.
 
 Rules (owned by `NotchWindow`, which observes `EyesModel.state`):
