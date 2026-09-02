@@ -1,6 +1,34 @@
 import AppKit
 import SwiftUI
 
+enum GazeMapper {
+    private static let power: CGFloat = 0.55
+
+    /// Maps screen-space cursor movement to normalized pupil travel.
+    static func map(
+        mouseLocation: CGPoint,
+        panelCenter: CGPoint,
+        screenSize: CGSize
+    ) -> CGPoint {
+        guard screenSize.width > 0, screenSize.height > 0 else { return .zero }
+
+        let normalizedX = (mouseLocation.x - panelCenter.x) / (screenSize.width / 2)
+        let normalizedY = (mouseLocation.y - panelCenter.y) / (screenSize.height / 2)
+        return CGPoint(
+            x: curved(normalizedX),
+            y: -curved(normalizedY)
+        )
+    }
+
+    private static func curved(_ value: CGFloat) -> CGFloat {
+        let clamped = value.clamped(to: -1 ... 1)
+        guard clamped != 0 else { return 0 }
+        return clamped.sign == .minus
+            ? -pow(abs(clamped), power)
+            : pow(clamped, power)
+    }
+}
+
 @MainActor
 final class CursorTracker {
     private let eyesModel: EyesModel
@@ -47,14 +75,14 @@ final class CursorTracker {
             return
         }
 
-        let mouse = NSEvent.mouseLocation
-        let panelCenter = CGPoint(x: window.frame.midX, y: window.frame.midY)
-        let normalizedX = (mouse.x - panelCenter.x) / (screenFrame.width / 2)
-        let normalizedY = (mouse.y - panelCenter.y) / (screenFrame.height / 2)
-        eyesModel.gaze = CGPoint(
-            x: normalizedX.clamped(to: -1 ... 1),
-            y: normalizedY.clamped(to: -1 ... 1)
+        let mappedGaze = GazeMapper.map(
+            mouseLocation: NSEvent.mouseLocation,
+            panelCenter: CGPoint(x: window.frame.midX, y: window.frame.midY),
+            screenSize: screenFrame.size
         )
+        withAnimation(.easeOut(duration: 0.12)) {
+            eyesModel.gaze = mappedGaze
+        }
     }
 
     private func screenFrame(for window: NSWindow) -> CGRect? {

@@ -11,7 +11,7 @@ enum StateRenderer {
         .appendingPathComponent("build/renders", isDirectory: true)
     }
 
-    private static let notchSize = CGSize(width: 200, height: 66)
+    private static let notchSize = CGSize(width: 200, height: 72)
     private static let bubbleSize = CGSize(width: 320, height: 112)
     private static let bubbleInputSize = CGSize(width: 320, height: 122)
     private static let background = Color(
@@ -58,6 +58,21 @@ enum StateRenderer {
             rendered: &rendered
         )
         try renderNotch(
+            name: "angry-gaze-left.png",
+            state: .angry,
+            gaze: CGPoint(x: -0.8, y: 0.1),
+            outputURL: outputURL,
+            rendered: &rendered
+        )
+        try renderNotch(
+            name: "idle-gaze-down.png",
+            state: .idle,
+            blinkProgress: 0,
+            gaze: CGPoint(x: 0.3, y: 0.9),
+            outputURL: outputURL,
+            rendered: &rendered
+        )
+        try renderNotch(
             name: "happy.png",
             state: .happy,
             outputURL: outputURL,
@@ -67,7 +82,7 @@ enum StateRenderer {
             name: "tray-hidden.png",
             state: .idle,
             blinkProgress: 0,
-            trayOffset: 34,
+            trayOffset: 40,
             outputURL: outputURL,
             rendered: &rendered
         )
@@ -108,7 +123,7 @@ enum StateRenderer {
             NotchPanelContent(
                 model: model,
                 notchHeight: 32,
-                panelHeight: 34,
+                panelHeight: 40,
                 trayOffset: trayOffset,
                 blinkProgress: blinkProgress,
                 gaze: gaze,

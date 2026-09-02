@@ -38,7 +38,7 @@ final class BubbleWindow: NSPanel, ChatPresenter {
 
     init(
         notchGeometry: @escaping () -> NotchGeometry,
-        panelHeight: CGFloat = 34
+        panelHeight: CGFloat = 40
     ) {
         let model = BubbleModel()
         let view = BubbleView(model: model) { _ in }

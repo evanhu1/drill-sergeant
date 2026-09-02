@@ -4,7 +4,7 @@ import SwiftUI
 
 @MainActor
 final class NotchWindow: NSPanel {
-    private static let panelHeight: CGFloat = 34
+    private static let panelHeight: CGFloat = 40
 
     var onSetGoal: (() -> Void)?
     var onCheckNow: (() -> Void)?

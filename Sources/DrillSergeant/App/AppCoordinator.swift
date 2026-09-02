@@ -62,6 +62,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         notchWindow.onQuit = { [weak self] in self?.quit() }
         chat.onVisibilityChange = { notchWindow.setTrayPinned($0) }
         notchWindow.showOnScreen()
+        cursorTracker.start()
 
         if ProcessInfo.processInfo.environment["DS_DEV"] == "1" {
             showDeveloperToolbar()
@@ -246,12 +247,6 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
     ) {
         Log.info("State changed: \(old.rawValue) -> \(state.rawValue)")
         eyesModel?.state = state
-
-        if state == .watching || state == .angry {
-            cursorTracker?.start()
-        } else {
-            cursorTracker?.stop()
-        }
 
         let wasOnboarding = onboarding != nil
         onboarding?.schedulerDidChange(to: state)
