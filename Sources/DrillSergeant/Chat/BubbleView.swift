@@ -77,12 +77,9 @@ struct BubbleView: View {
     var body: some View {
         VStack(spacing: 0) {
             BubbleTail()
-                .fill(BubbleStyle.background)
-                .frame(width: 18, height: 8)
-                .overlay {
-                    BubbleTailOutline()
-                        .stroke(.white.opacity(0.1), lineWidth: 1)
-                }
+                .fill(BubbleStyle.surface)
+                .frame(width: BubbleStyle.tailWidth, height: BubbleStyle.tailHeight)
+                .offset(y: 1) // overlap the body so no seam shows
                 .contentShape(Rectangle())
                 .onTapGesture(perform: handleBubbleTap)
 
@@ -103,43 +100,40 @@ struct BubbleView: View {
     }
 
     private var content: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
             Text(model.text)
-                .font(.system(size: 13))
-                .foregroundStyle(.white)
+                .font(BubbleStyle.bodyFont)
+                .foregroundStyle(BubbleStyle.ink)
+                .lineSpacing(2)
                 .lineLimit(10)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(.trailing, 14)
+                .padding(.trailing, 18)
 
             if model.isInputOpen {
                 replyField
                     .transition(.opacity.combined(with: .move(edge: .top)))
             } else {
                 Text("reply ←")
-                    .font(.system(size: 11))
-                    .foregroundStyle(.secondary)
+                    .font(BubbleStyle.hintFont)
+                    .foregroundStyle(BubbleStyle.muted)
                     .opacity((staticHover ?? model.isHovered) ? 1 : 0)
-                    .frame(height: 18, alignment: .leading)
+                    .frame(height: 14, alignment: .leading)
                     .accessibilityHidden(true)
             }
         }
-        .padding(.horizontal, 16)
-        .padding(.top, 13)
+        .padding(.horizontal, 18)
+        .padding(.top, 14)
         .padding(.bottom, 12)
         .background {
-            RoundedRectangle(cornerRadius: 16, style: .continuous)
-                .fill(BubbleStyle.background)
-                .overlay {
-                    RoundedRectangle(cornerRadius: 16, style: .continuous)
-                        .stroke(.white.opacity(0.1), lineWidth: 1)
-                }
+            RoundedRectangle(cornerRadius: BubbleStyle.cornerRadius, style: .continuous)
+                .fill(BubbleStyle.surface)
         }
         .contentShape(Rectangle())
         .onTapGesture(perform: handleBubbleTap)
         .overlay(alignment: .topTrailing) {
             closeButton
-                .padding(8)
+                .padding(9)
         }
         .animation(.easeInOut(duration: 0.2), value: model.isInputOpen)
     }
@@ -149,15 +143,12 @@ struct BubbleView: View {
             model.requestClose()
         } label: {
             Image(systemName: "xmark")
-                .font(.system(size: 8, weight: .semibold))
-                .foregroundStyle(
-                    Color(nsColor: .secondaryLabelColor)
-                        .opacity(isCloseHovered ? 1 : 0.6)
-                )
-                .frame(width: 14, height: 14)
+                .font(.system(size: 8, weight: .bold))
+                .foregroundStyle(isCloseHovered ? BubbleStyle.ink : BubbleStyle.muted)
+                .frame(width: 18, height: 18)
                 .background {
                     Circle()
-                        .fill(.white.opacity(isCloseHovered ? 0.12 : 0.07))
+                        .fill(isCloseHovered ? BubbleStyle.fieldHover : BubbleStyle.field)
                 }
                 .contentShape(Circle())
         }
@@ -180,10 +171,16 @@ struct BubbleView: View {
         Group {
             if let staticReplyText {
                 Text(staticReplyText.isEmpty ? "Talk back…" : staticReplyText)
+                    .foregroundStyle(staticReplyText.isEmpty ? BubbleStyle.muted : BubbleStyle.ink)
                     .frame(maxWidth: .infinity, alignment: .leading)
             } else {
-                TextField("Talk back…", text: $model.replyText)
+                TextField(
+                    "",
+                    text: $model.replyText,
+                    prompt: Text("Talk back…").foregroundColor(BubbleStyle.muted)
+                )
                     .textFieldStyle(.plain)
+                    .foregroundStyle(BubbleStyle.ink)
                     .focused($isReplyFocused)
                     .onSubmit {
                         model.submitReply()
@@ -195,17 +192,12 @@ struct BubbleView: View {
                     }
             }
         }
-            .font(.system(size: 13))
-            .foregroundStyle(.white)
-            .padding(.horizontal, 10)
-            .frame(height: 26)
+            .font(BubbleStyle.bodyFont)
+            .padding(.horizontal, 12)
+            .frame(height: 32)
             .background {
-                RoundedRectangle(cornerRadius: 7, style: .continuous)
-                    .fill(.white.opacity(0.08))
-                    .overlay {
-                        RoundedRectangle(cornerRadius: 7, style: .continuous)
-                            .stroke(.white.opacity(0.14), lineWidth: 1)
-                    }
+                RoundedRectangle(cornerRadius: 11, style: .continuous)
+                    .fill(BubbleStyle.field)
             }
     }
 
@@ -222,31 +214,38 @@ struct BubbleView: View {
 
 private enum BubbleStyle {
     static let width: CGFloat = 320
-    static let background = Color(
-        red: 28 / 255,
-        green: 28 / 255,
-        blue: 30 / 255,
-        opacity: 0.96
-    )
+    static let cornerRadius: CGFloat = 20
+    static let tailWidth: CGFloat = 26
+    static let tailHeight: CGFloat = 12
+
+    /// Warm white, same family as the eyes' sclera so the bubble reads as the character speaking.
+    static let surface = Color(red: 1.0, green: 0.992, blue: 0.98)
+    static let ink = Color(red: 0.11, green: 0.10, blue: 0.11)
+    static let muted = Color(red: 0.55, green: 0.53, blue: 0.55)
+    static let field = Color(red: 0.94, green: 0.925, blue: 0.91)
+    static let fieldHover = Color(red: 0.89, green: 0.87, blue: 0.855)
+
+    static let bodyFont = Font.system(size: 14, weight: .medium, design: .rounded)
+    static let hintFont = Font.system(size: 11, weight: .medium, design: .rounded)
 }
 
+/// A comic-style tail pointing up at the notch: slightly curved sides, rounded tip.
 private struct BubbleTail: Shape {
     func path(in rect: CGRect) -> Path {
         Path { path in
-            path.move(to: CGPoint(x: rect.midX, y: rect.minY))
-            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
-            path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
+            let tip = CGPoint(x: rect.midX, y: rect.minY)
+            let left = CGPoint(x: rect.minX, y: rect.maxY)
+            let right = CGPoint(x: rect.maxX, y: rect.maxY)
+            path.move(to: left)
+            path.addQuadCurve(
+                to: tip,
+                control: CGPoint(x: rect.midX - rect.width * 0.18, y: rect.minY + rect.height * 0.55)
+            )
+            path.addQuadCurve(
+                to: right,
+                control: CGPoint(x: rect.midX + rect.width * 0.18, y: rect.minY + rect.height * 0.55)
+            )
             path.closeSubpath()
-        }
-    }
-}
-
-private struct BubbleTailOutline: Shape {
-    func path(in rect: CGRect) -> Path {
-        Path { path in
-            path.move(to: CGPoint(x: rect.minX, y: rect.maxY))
-            path.addLine(to: CGPoint(x: rect.midX, y: rect.minY))
-            path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
         }
     }
 }

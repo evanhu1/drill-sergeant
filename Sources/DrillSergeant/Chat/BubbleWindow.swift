@@ -123,7 +123,7 @@ final class BubbleWindow: NSPanel, ChatPresenter {
         ]
         backgroundColor = .clear
         isOpaque = false
-        hasShadow = false
+        hasShadow = true
         hidesOnDeactivate = false
         isMovable = false
         ignoresMouseEvents = false
