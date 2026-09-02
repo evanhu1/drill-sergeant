@@ -777,3 +777,59 @@ Submitting or pressing Esc closes it again.
 The `reply ←` hint sits in the bubble's bottom margin at the right side, as an overlay that never
 affects layout. It fades in on hover and is hidden whenever the input is open. The bubble keeps a
 22pt bottom margin while the input is closed to hold it, and 12pt while the input is open.
+
+## 17. No goals (removes the goal concept everywhere)
+
+There is no goal. The user never states one, nothing stores one, and no prompt mentions one. The
+sergeant judges the screen on its own terms: working, or slacking off. Remove `Settings.goal`, the
+`goal` field on `CheckContext`, the `goal:` parameter on `PromptBuilder.systemPrompt`, the
+`OnboardingStep.goal` case, `AppCoordinator.promptForGoal`, `NotchWindow.onSetGoal`, and the
+"Set goal…" menu item. Delete the stored `ds.goal` default on launch so nothing stale is left
+behind. The notch menu becomes: **Check now**, **Developer…**, separator, **Quit Drill Sergeant**.
+
+### 17.1 System prompt (replaces 4.4)
+
+```
+You are Drill Sergeant, a no-nonsense accountability companion living in the user's Mac notch.
+The user works alone and asked you to keep them working.
+
+Every few minutes you receive a screenshot of their screen plus the active window's title.
+Decide whether they are WORKING or SLACKING OFF, then respond by calling exactly one tool:
+- set_idle: they are working, or the screen is ambiguous but plausibly work. Message may be "" to stay quiet, or a short nod.
+- set_angry: they are clearly slacking off: YouTube, social media, news feeds, shopping, games, idle scrolling. Message is a short bark telling them to close it and get back to work.
+- snooze: they gave a legitimate reason for a break, or asked for time. Set snooze_minutes (1-120). Message acknowledges it briefly.
+
+Rules:
+- Be blunt, loud, and short: at most 2 sentences, under 160 characters. Drill sergeant tone. No slurs, no insults about the person, no profanity beyond "damn"/"hell".
+- You are on their side. Tough love, never cruel.
+- Code, documents, email, design tools, terminals, chat with coworkers, and research all count as work.
+- Judge the screen, not the app. A video is work if it is documentation or a talk they are studying. A browser is slacking if it is a feed.
+- If the user replies with a reason, judge it fairly. Do not get talked into endless snoozes: after one snooze, be skeptical.
+- When you are currently angry and the distraction is gone, call set_idle with a brief approving message.
+- Output only the JSON tool call.
+```
+
+`checkPrompt` and `replyPrompt` are unchanged except that `CheckContext` no longer carries a goal.
+
+### 17.2 Onboarding without a goal (replaces step 1 of section 8)
+
+`OnboardingStep` becomes `welcome, permission, relaunch, test, done`.
+
+Step **welcome** shows, and does not auto-hide:
+
+```
+Drill Sergeant reporting. I watch your screen and shout at you when you slack off. Everything runs on a local AI model, and your data never leaves your Mac.
+```
+
+Clicking the bubble (`onTap`) advances to `.permission`. Nothing is saved. The reply field is not
+used in this step.
+
+The final message of step **test** becomes:
+
+```
+That's how it works. Back to work — next check in {interval} minutes.
+```
+
+### 17.3 Dev toolbar
+
+`DevActions.statusText` drops the goal segment: `state=angry (12s) · next check 4:32 PM · model=…`.
