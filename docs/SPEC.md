@@ -990,3 +990,17 @@ the coordinator only reports what the user is doing.
 
 Static render inputs: `proximity`, `scanPhase` (0…1) and `attention` on `EyesView` and
 `NotchPanelContent`. New renders: `watching-scan.png`, `idle-near.png`, `glance-bubble.png`.
+
+## 21. Auto-hide countdown ring
+
+Bubbles that auto-hide show the time they have left as a ring around the close button: a 25pt
+circle, 1.5pt stroke in the muted ink at 70%, starting at twelve o'clock and draining clockwise.
+
+`BubbleModel.countdown` holds a `BubbleCountdown(start:duration:)` while an auto-hide is pending
+and is cleared whenever the timer is cancelled, so the ring is absent on bubbles that stay up
+(angry, onboarding, the thinking ellipsis, errors) and disappears the moment the reply field
+opens. Showing a new message restarts the timer, which resets the ring to full.
+
+The ring reads the clock through a `TimelineView`, never a SwiftUI animation: the bubble
+re-renders on hover and on every keystroke, and an animated trim would snap to empty. `BubbleView`
+takes a `staticCountdown` fraction for renders; `bubble-countdown.png` shows it at 0.65.

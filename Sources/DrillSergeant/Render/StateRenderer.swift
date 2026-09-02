@@ -121,6 +121,14 @@ enum StateRenderer {
             rendered: &rendered
         )
         try renderBubble(
+            name: "bubble-countdown.png",
+            inputOpen: false,
+            countdown: 0.65,
+            size: bubbleSize,
+            outputURL: outputURL,
+            rendered: &rendered
+        )
+        try renderBubble(
             name: "bubble-input.png",
             inputOpen: true,
             size: bubbleInputSize,
@@ -172,6 +180,7 @@ enum StateRenderer {
     private static func renderBubble(
         name: String,
         inputOpen: Bool,
+        countdown: Double? = nil,
         size: CGSize,
         outputURL: URL,
         rendered: inout [(name: String, image: NSImage)]
@@ -189,7 +198,8 @@ enum StateRenderer {
                 staticHover: true,
                 autoFocusInput: false,
                 staticReplyText: inputOpen ? model.replyText : nil,
-                drawsShadow: true
+                drawsShadow: true,
+                staticCountdown: countdown
             ) { _ in }
         }
         .frame(width: size.width, height: size.height, alignment: .top)

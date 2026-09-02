@@ -6,6 +6,8 @@ final class BubbleModel: ObservableObject {
     @Published private(set) var isInputOpen = false
     @Published var replyText = ""
     @Published var isHovered = false
+    /// Set while an auto-hide is pending, so the close button can show time left.
+    @Published private(set) var countdown: BubbleCountdown?
 
     var onReply: ((String) -> Void)?
     var onTap: (() -> Void)?
@@ -14,6 +16,10 @@ final class BubbleModel: ObservableObject {
 
     func replaceText(_ text: String) {
         self.text = text
+    }
+
+    func setCountdown(_ countdown: BubbleCountdown?) {
+        self.countdown = countdown
     }
 
     func handleTap() {
@@ -59,6 +65,8 @@ struct BubbleView: View {
     /// Draw the shadow in SwiftUI. The live bubble leaves it to the window server (see
     /// `BubbleWindow`); only static renders need it drawn inside the view.
     var drawsShadow = false
+    /// Fraction of the auto-hide left, for static renders. Live bubbles read the clock instead.
+    var staticCountdown: Double? = nil
 
     @FocusState private var isReplyFocused: Bool
     @State private var isCloseHovered = false
@@ -69,6 +77,7 @@ struct BubbleView: View {
         autoFocusInput: Bool = true,
         staticReplyText: String? = nil,
         drawsShadow: Bool = false,
+        staticCountdown: Double? = nil,
         onHeightChange: @escaping (CGFloat) -> Void
     ) {
         self.model = model
@@ -76,6 +85,7 @@ struct BubbleView: View {
         self.autoFocusInput = autoFocusInput
         self.staticReplyText = staticReplyText
         self.drawsShadow = drawsShadow
+        self.staticCountdown = staticCountdown
         self.onHeightChange = onHeightChange
     }
 
@@ -172,12 +182,40 @@ struct BubbleView: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        .overlay {
+            countdownRing
+        }
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.12)) {
                 isCloseHovered = hovering
             }
         }
         .accessibilityLabel("Close")
+    }
+
+    /// Drains clockwise from full as the auto-hide runs out. Driven by the clock, not by an
+    /// animation, so a re-render mid-countdown cannot snap it to the end.
+    @ViewBuilder
+    private var countdownRing: some View {
+        if let staticCountdown {
+            ring(remaining: staticCountdown)
+        } else if let countdown = model.countdown {
+            TimelineView(.periodic(from: countdown.start, by: 1.0 / 30.0)) { context in
+                ring(remaining: countdown.remaining(at: context.date))
+            }
+        }
+    }
+
+    private func ring(remaining: Double) -> some View {
+        Circle()
+            .trim(from: 0, to: min(max(remaining, 0), 1))
+            .stroke(
+                BubbleStyle.muted.opacity(0.7),
+                style: StrokeStyle(lineWidth: 1.5, lineCap: .round)
+            )
+            .rotationEffect(.degrees(-90))
+            .frame(width: BubbleStyle.ringSize, height: BubbleStyle.ringSize)
+            .allowsHitTesting(false)
     }
 
     private func handleBubbleTap() {
@@ -238,6 +276,8 @@ enum BubbleStyle {
     static let cornerRadius: CGFloat = 20
     /// Bottom margin kept clear for the reply hint when the input is closed.
     static let hintGutter: CGFloat = 22
+    /// Sits just outside the 18pt close button.
+    static let ringSize: CGFloat = 25
     static let tailWidth: CGFloat = 26
     static let tailHeight: CGFloat = 12
 
@@ -296,5 +336,17 @@ private struct RenderShadow: ViewModifier {
         } else {
             content
         }
+    }
+}
+
+/// The pending auto-hide, as a window of time the close button's ring draws down.
+struct BubbleCountdown: Equatable {
+    let start: Date
+    let duration: TimeInterval
+
+    func remaining(at date: Date) -> Double {
+        guard duration > 0 else { return 0 }
+        let elapsed = date.timeIntervalSince(start)
+        return min(max(1 - elapsed / duration, 0), 1)
     }
 }

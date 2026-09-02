@@ -9,7 +9,7 @@ final class BubbleWindow: NSPanel, ChatPresenter {
     private static let notchGap: CGFloat = 8
     private static let animationOffset: CGFloat = 6
     private static let animationDuration: TimeInterval = 0.2
-    private static let autoHideDelay: UInt64 = 10_000_000_000
+    private static let autoHideSeconds: TimeInterval = 10
 
     private let notchGeometry: () -> NotchGeometry
     private let notchPanelHeight: CGFloat
@@ -244,9 +244,14 @@ final class BubbleWindow: NSPanel, ChatPresenter {
         cancelAutoHide()
         guard autoHideEnabled, !model.isInputOpen, isVisible else { return }
 
+        model.setCountdown(
+            BubbleCountdown(start: Date(), duration: Self.autoHideSeconds)
+        )
         autoHideTask = Task { @MainActor [weak self] in
             do {
-                try await Task.sleep(nanoseconds: Self.autoHideDelay)
+                try await Task.sleep(
+                    nanoseconds: UInt64(Self.autoHideSeconds * 1_000_000_000)
+                )
             } catch {
                 return
             }
@@ -258,6 +263,7 @@ final class BubbleWindow: NSPanel, ChatPresenter {
     private func cancelAutoHide() {
         autoHideTask?.cancel()
         autoHideTask = nil
+        model.setCountdown(nil)
     }
 }
 
