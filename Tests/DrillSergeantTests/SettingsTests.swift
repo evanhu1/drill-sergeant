@@ -13,6 +13,8 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(settings.onboardingStep, .welcome)
         XCTAssertEqual(settings.ollamaBaseURL.absoluteString, "http://127.0.0.1:11434")
         XCTAssertFalse(settings.screenPermissionRequestPending)
+        XCTAssertFalse(settings.directCapturePermissionRequestPending)
+        XCTAssertFalse(settings.hasPendingPermissionRequest)
         XCTAssertEqual(settings.userPreferences, [])
         XCTAssertEqual(settings.workHours, .standard)
         XCTAssertTrue(settings.tracingEnabled)
@@ -22,6 +24,7 @@ final class SettingsTests: XCTestCase {
         settings.onboardingStep = .test
         settings.ollamaBaseURL = URL(string: "http://localhost:9999")!
         settings.screenPermissionRequestPending = true
+        settings.directCapturePermissionRequestPending = true
         settings.workHours = try WorkHours(
             days: [.tuesday, .thursday],
             startTime: "10:30",
@@ -37,6 +40,8 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(reloaded.onboardingStep, .test)
         XCTAssertEqual(reloaded.ollamaBaseURL.absoluteString, "http://localhost:9999")
         XCTAssertTrue(reloaded.screenPermissionRequestPending)
+        XCTAssertTrue(reloaded.directCapturePermissionRequestPending)
+        XCTAssertTrue(reloaded.hasPendingPermissionRequest)
         XCTAssertEqual(reloaded.userPreferences, ["YouTube tutorials count as work."])
         XCTAssertEqual(
             reloaded.workHours,
@@ -47,6 +52,8 @@ final class SettingsTests: XCTestCase {
             )
         )
 
+        reloaded.clearPendingPermissionRequests()
+        XCTAssertFalse(reloaded.hasPendingPermissionRequest)
     }
 
     func testEnvironmentOverridesDevelopmentValues() {
@@ -84,6 +91,8 @@ final class SettingsTests: XCTestCase {
         let (defaults, suiteName) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         defaults.set(OnboardingStep.done.rawValue, forKey: "ds.onboardingStep")
+        defaults.set(true, forKey: "ds.screenPermissionRequestPending")
+        defaults.set(true, forKey: "ds.directCapturePermissionRequestPending")
         defaults.set(["Slack counts as work."], forKey: "ds.userPreferences")
         let customHours = try WorkHours(
             days: [.saturday, .sunday],
@@ -98,6 +107,8 @@ final class SettingsTests: XCTestCase {
         )
 
         XCTAssertEqual(settings.onboardingStep, .welcome)
+        XCTAssertFalse(settings.screenPermissionRequestPending)
+        XCTAssertFalse(settings.directCapturePermissionRequestPending)
         XCTAssertEqual(settings.userPreferences, ["Slack counts as work."])
         XCTAssertEqual(settings.workHours, customHours)
     }

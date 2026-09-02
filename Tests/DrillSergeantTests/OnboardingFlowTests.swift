@@ -21,16 +21,17 @@ final class OnboardingFlowTests: XCTestCase {
                 + "off. Everything runs on a local AI model, and your data never leaves your Mac."
         )
         XCTAssertEqual(chat.lastShown?.autoHide, false)
-        XCTAssertEqual(chat.affordance, .onboardingNext)
+        XCTAssertEqual(chat.affordance, .click)
         XCTAssertTrue(chat.askedMessages.isEmpty)
         XCTAssertNil(chat.onReply)
         XCTAssertNotNil(chat.onTap)
+        XCTAssertNotNil(chat.onClose)
         XCTAssertTrue(defaults.persistentDomain(forName: suiteName)?.isEmpty ?? true)
 
         chat.onTap?()
 
         XCTAssertEqual(settings.onboardingStep, .permission)
-        XCTAssertEqual(chat.affordance, .onboardingNext)
+        XCTAssertEqual(chat.affordance, .click)
         XCTAssertTrue(chat.shownMessages.contains { $0.text.contains("Screen Recording") })
         XCTAssertFalse(chat.lastShown?.text.hasPrefix("Good.") ?? true)
         XCTAssertEqual(
@@ -49,6 +50,24 @@ final class OnboardingFlowTests: XCTestCase {
 
         XCTAssertTrue(resumedChat.shownMessages.contains { $0.text.contains("Screen Recording") })
         XCTAssertFalse(resumedChat.shownMessages.contains { $0.text.contains("Drill Sergeant reporting") })
+    }
+
+    func testCloseDuringOnboardingQuits() {
+        let (settings, defaults, suiteName) = makeSettings()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let chat = FakeChatPresenter()
+        var quitCount = 0
+        let flow = makeFlow(
+            chat: chat,
+            scheduler: Scheduler(clock: TestClock()),
+            settings: settings,
+            quit: { quitCount += 1 }
+        )
+
+        flow.start()
+        chat.onClose?()
+
+        XCTAssertEqual(quitCount, 1)
     }
 
     /// The step used to disappear whenever `isPermissionGranted()` said yes, which is exactly what
@@ -96,7 +115,7 @@ final class OnboardingFlowTests: XCTestCase {
 
         await waitUntil { settings.onboardingStep == .directCapturePermission }
         XCTAssertFalse(chat.shownMessages.contains { $0.text.contains("restart") })
-        XCTAssertEqual(chat.affordance, .onboardingNext)
+        XCTAssertEqual(chat.affordance, .click)
         XCTAssertTrue(chat.lastShown?.text.contains("direct screen access") ?? false)
     }
 
@@ -122,7 +141,7 @@ final class OnboardingFlowTests: XCTestCase {
 
         await waitUntil { settings.onboardingStep == .relaunch }
         XCTAssertTrue(settings.screenPermissionRequestPending)
-        XCTAssertEqual(chat.affordance, .onboardingNext)
+        XCTAssertEqual(chat.affordance, .click)
         XCTAssertTrue(chat.shownMessages.contains { $0.text.contains("restart") })
     }
 
@@ -289,14 +308,14 @@ final class OnboardingFlowTests: XCTestCase {
         flow.start()
 
         XCTAssertEqual(requestCount, 0)
-        XCTAssertEqual(chat.affordance, .onboardingNext)
+        XCTAssertEqual(chat.affordance, .click)
         XCTAssertTrue(chat.lastShown?.text.contains("automatically") ?? false)
-        XCTAssertTrue(chat.lastShown?.text.contains("never audio") ?? false)
+        XCTAssertTrue(chat.lastShown?.text.contains("pick it every time") ?? false)
         XCTAssertNotNil(chat.onTap)
 
         chat.onTap?()
 
-        XCTAssertEqual(chat.affordance, .onboardingNext)
+        XCTAssertEqual(chat.affordance, .click)
         await waitUntil { settings.onboardingStep == .test }
         XCTAssertEqual(requestCount, 1)
         XCTAssertFalse(settings.directCapturePermissionRequestPending)
@@ -393,7 +412,7 @@ final class OnboardingFlowTests: XCTestCase {
         }
         XCTAssertEqual(settings.onboardingStep, .directCapturePermission)
         XCTAssertTrue(settings.directCapturePermissionRequestPending)
-        XCTAssertEqual(chat.affordance, .onboardingNext)
+        XCTAssertEqual(chat.affordance, .click)
         XCTAssertNotNil(chat.onTap)
     }
 
@@ -433,6 +452,29 @@ final class OnboardingFlowTests: XCTestCase {
         XCTAssertEqual(settings.onboardingStep, .done)
     }
 
+    func testYouTubePromptIsDisplayOnly() async {
+        let (settings, defaults, suiteName) = makeSettings()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        settings.onboardingStep = .test
+        let chat = FakeChatPresenter()
+        let flow = makeFlow(
+            chat: chat,
+            scheduler: Scheduler(clock: TestClock()),
+            settings: settings
+        )
+        flow.isOllamaReady = { true }
+        flow.isYouTubeOpen = { false }
+        flow.pollInterval = 0.001
+
+        flow.start()
+        await waitUntil { chat.lastShown?.text.contains("YouTube") == true }
+
+        XCTAssertEqual(chat.affordance, .display)
+        XCTAssertNil(chat.onReply)
+        XCTAssertNil(chat.onTap)
+        XCTAssertNotNil(chat.onClose)
+    }
+
     func testIdleAfterTestMarksOnboardingDone() async {
         let (settings, defaults, suiteName) = makeSettings()
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -469,12 +511,15 @@ final class OnboardingFlowTests: XCTestCase {
         )
         XCTAssertNil(chat.onReply)
         XCTAssertNil(chat.onTap)
+        XCTAssertNil(chat.onClose)
+        XCTAssertEqual(chat.affordance, .reply)
     }
 
     private func makeFlow(
         chat: FakeChatPresenter,
         scheduler: Scheduler,
         settings: Settings,
+        quit: @escaping () -> Void = {},
         runCheck: @escaping (CheckReason) async -> Decision? = { _ in nil }
     ) -> OnboardingFlow {
         OnboardingFlow(
@@ -483,6 +528,7 @@ final class OnboardingFlowTests: XCTestCase {
             settings: settings,
             ollama: OllamaClient(model: settings.model),
             relaunch: {},
+            quit: quit,
             runCheck: runCheck
         )
     }
@@ -515,6 +561,7 @@ private final class FakeChatPresenter: ChatPresenter {
 
     var onReply: ((String) -> Void)?
     var onTap: (() -> Void)?
+    var onClose: (() -> Void)?
     var affordance: BubbleAffordance = .reply
     private(set) var shownMessages: [ShownMessage] = []
     private(set) var askedMessages: [String] = []

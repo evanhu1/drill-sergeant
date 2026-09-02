@@ -444,6 +444,9 @@ protocol ChatPresenter: AnyObject {
     var onReply: ((String) -> Void)? { get set }
     /// Called when the user clicks the bubble body (used by onboarding for "click to grant permission").
     var onTap: (() -> Void)? { get set }
+    /// Overrides the close button's normal hide behavior while set.
+    var onClose: (() -> Void)? { get set }
+    var affordance: BubbleAffordance { get set }
 }
 ```
 
@@ -500,7 +503,8 @@ enum OnboardingStep: String, Codable { case welcome, goal, permission, relaunch,
 @MainActor
 final class OnboardingFlow {
     init(chat: ChatPresenter, scheduler: Scheduler, settings: Settings, ollama: OllamaClient,
-         relaunch: @escaping () -> Void, runCheck: @escaping (CheckReason) async -> Decision?)
+         relaunch: @escaping () -> Void, quit: @escaping () -> Void,
+         runCheck: @escaping (CheckReason) async -> Decision?)
     var onFinished: (() -> Void)?
     func start()   // resumes from settings.onboardingStep
 }
@@ -511,7 +515,7 @@ Steps:
 1. **welcome → goal**: `ask("Drill Sergeant reporting. I watch your screen every 10 minutes and shout when you slack off. Everything runs on a local model. Nothing leaves this Mac. First: what are you working on today?")`. On reply: save `goal`, step = `.permission`.
 2. **permission**: if `ScreenPermission.isGranted()` skip to step 4. Else `show("Now I need Screen Recording permission to see your screen. Click this bubble to grant it.", autoHide: false)` with `onTap` → `ScreenPermission.request()`; if that returns false and the OS prompt did not appear (second attempt), call `openSystemSettings()`. Poll `isGranted()` every 2s. When granted: step = `.relaunch`.
 3. **relaunch**: `show("Permission granted. I have to restart to use it. Click here to restart.", autoHide: false)`, `onTap` → `relaunch()`. On next launch this step is skipped straight to `.test` because permission is granted (check `isGranted()` at start; if `.relaunch` and granted → `.test`).
-4. **test**: first verify Ollama: if not reachable or model missing, `show("I can't reach Ollama or the model {model} is missing. Run install.sh again, or `ollama pull {model}`. I'll keep checking.", autoHide: false)` and retry every 10s. When ready: `show("Let's test it. Open YouTube. I'm watching.", autoHide: false)`, `scheduler.enterWatching()`. Poll `ActiveWindowInspector.current().looksLikeYouTube` every 2s (also accept the user replying "done"). On detection: `runCheck(.onboarding)` → scheduler.apply. Expect angry; the normal angry poll then takes over. When the scheduler reaches `.happy` (or `.idle` if the model was lenient), `show("That's how it works. Now back to: {goal}. Next check in {interval} minutes.", autoHide: true)`, step = `.done`, `onFinished?()`.
+4. **test**: first verify Ollama: if not reachable or model missing, `show("I can't reach Ollama or the model {model} is missing. Run install.sh again, or `ollama pull {model}`. I'll keep checking.", autoHide: false)` and retry every 10s. When ready: `show("Let's test it. Open YouTube. I'm watching.", autoHide: false)`, `scheduler.enterWatching()`. This is a display bubble: it has no reply or next action. Poll `ActiveWindowInspector.current().looksLikeYouTube` every 2s. On detection: `runCheck(.onboarding)` → scheduler.apply. Expect angry; the normal angry poll then takes over. When the scheduler reaches `.happy` (or `.idle` if the model was lenient), `show("That's how it works. Now back to: {goal}. Next check in {interval} minutes.", autoHide: true)`, step = `.done`, `onFinished?()`.
 
 If the user never opens YouTube within 3 minutes, `show("Still waiting. Open YouTube so I can show you what happens.", autoHide: false)` and keep polling.
 
@@ -668,7 +672,8 @@ fully hidden. `AppCoordinator` wires it to `notchWindow.setTrayPinned`.
 A small circular close button (14pt, `xmark` SF Symbol at 8pt, secondary label color at 60%,
 100% on hover) sits in the bubble's top-right corner, 8pt inset. Clicking it calls `hide()`,
 closes the reply input, cancels auto-hide, and does not change companion state. It is always
-visible while the bubble is showing. The hover hint `reply ←` stays bottom-left.
+visible while the bubble is showing. During onboarding, the close callback is overridden to call
+the coordinator's normal `quit()` path, so X quits the app and clears pending permission markers.
 
 ### 14.3 Developer toolbar
 
@@ -780,15 +785,21 @@ States:
 Renders (14.4): add `angry-gaze-left.png` (gaze (-0.8, 0.1)) and `idle-gaze-down.png`
 (gaze (0.3, 0.9)) so lid clipping and travel limits can be checked.
 
-## 16. Bubble reply affordance (amends 6.1, 6.2, 14.2)
+## 16. Bubble affordances (amends 6.1, 6.2, 14.2)
 
-The reply field is never shown by default, not even for `ask()`. Every bubble opens as text only.
-Clicking the bubble body opens the field (unless `onTap` is set, which still takes precedence).
-Submitting or pressing Esc closes it again.
+Every bubble has exactly one `BubbleAffordance`: `.reply`, `.click`, or `.display`.
 
-The `reply ←` hint sits in the bubble's bottom margin at the right side, as an overlay that never
-affects layout. It fades in on hover and is hidden whenever the input is open. The bubble keeps a
-22pt bottom margin while the input is closed to hold it, and 12pt while the input is open.
+- `.reply` opens the reply field when its body is clicked. Its `reply ←` hint fades in on hover
+  and disappears while the input is open. Submitting or pressing Esc closes the field.
+- `.click` calls `onTap` when its body is clicked. Its `Next →` hint is always visible in dark
+  ink and the body uses the pointing-hand cursor.
+- `.display` presents text only. It has no action hint, reserves no hint gutter, uses the arrow
+  cursor, and ignores body clicks.
+
+The reply field is never shown by default, not even for `ask()`. Action hints sit in the bubble's
+bottom-right margin as overlays that never affect layout. Reply and click bubbles keep a 22pt
+bottom margin while closed; display bubbles use ordinary content padding; open reply bubbles use
+12pt.
 
 ## 17. No goals (removes the goal concept everywhere)
 
@@ -1111,12 +1122,13 @@ one-shot `DS_RESET_ONBOARDING` override.
 
 ## 26. Tap-to-advance onboarding affordance
 
-The welcome, Screen Recording permission, restart, and direct-capture permission bubbles use a
-dedicated `BubbleAffordance.onboardingNext` state. In that state, the bottom-right hint reads
+The welcome, Screen Recording permission, restart, and direct-capture permission bubbles use the
+dedicated `BubbleAffordance.click` state. In that state, the bottom-right hint reads
 `Next →`, is always visible, uses dark ink at 72% opacity, and does not lighten on hover. It remains active while
 moving between tap-to-advance onboarding screens, and the whole bubble uses the macOS pointing-hand
-cursor. The standard `reply ←` affordance and arrow cursor return only when the flow reaches a
-screen that accepts typed input, or when onboarding ends.
+cursor. Progress and waiting messages use `.display`; specifically, `Let's test it, open up
+YouTube.` has neither a reply hint nor a next action. The standard `.reply` affordance returns when
+onboarding ends.
 
 The permission message begins `Now I need Screen Recording permission…`; it does not begin with
 `Good.` The state renderer includes `bubble-onboarding.png` for the dedicated welcome treatment.

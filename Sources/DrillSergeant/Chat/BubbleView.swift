@@ -24,10 +24,13 @@ final class BubbleModel: ObservableObject {
     }
 
     func handleTap() {
-        if let onTap {
-            onTap()
-        } else {
+        switch affordance {
+        case .reply:
             openInput()
+        case .click:
+            onTap?()
+        case .display:
+            break
         }
     }
 
@@ -134,7 +137,7 @@ struct BubbleView: View {
         }
         .padding(.horizontal, 18)
         .padding(.top, 14)
-        .padding(.bottom, model.isInputOpen ? 12 : BubbleStyle.hintGutter)
+        .padding(.bottom, bottomPadding)
         .background {
             RoundedRectangle(cornerRadius: BubbleStyle.cornerRadius, style: .continuous)
                 .fill(BubbleStyle.surface)
@@ -152,28 +155,25 @@ struct BubbleView: View {
     }
 
     /// Sits in the bubble's bottom margin, right side. It never affects layout.
+    @ViewBuilder
     private var actionHint: some View {
-        Text(actionHintText)
-            .font(BubbleStyle.hintFont)
-            .foregroundStyle(actionHintColor)
-            .padding(.trailing, 16)
-            .padding(.bottom, 5)
-            .opacity(showsActionHint ? 1 : 0)
-            .allowsHitTesting(false)
-            .accessibilityHidden(true)
-    }
-
-    private var actionHintText: String {
-        switch model.affordance {
-        case .reply: return "reply ←"
-        case .onboardingNext: return "Next →"
+        if let hint = model.affordance.actionHint {
+            Text(hint)
+                .font(BubbleStyle.hintFont)
+                .foregroundStyle(actionHintColor)
+                .padding(.trailing, 16)
+                .padding(.bottom, 5)
+                .opacity(showsActionHint ? 1 : 0)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
         }
     }
 
     private var actionHintColor: Color {
         switch model.affordance {
         case .reply: return BubbleStyle.muted
-        case .onboardingNext: return BubbleStyle.ink.opacity(0.72)
+        case .click: return BubbleStyle.ink.opacity(0.72)
+        case .display: return .clear
         }
     }
 
@@ -181,8 +181,14 @@ struct BubbleView: View {
         guard !model.isInputOpen else { return false }
         switch model.affordance {
         case .reply: return staticHover ?? model.isHovered
-        case .onboardingNext: return true
+        case .click: return true
+        case .display: return false
         }
+    }
+
+    private var bottomPadding: CGFloat {
+        if model.isInputOpen { return 12 }
+        return model.affordance.actionHint == nil ? 14 : BubbleStyle.hintGutter
     }
 
     private var closeButton: some View {

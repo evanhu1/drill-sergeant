@@ -37,6 +37,7 @@ final class OnboardingFlow {
     private let scheduler: Scheduler
     private let settings: Settings
     private let relaunchHandler: () -> Void
+    private let quitHandler: () -> Void
     private let runCheck: (CheckReason) async -> Decision?
 
     private var pollingTask: Task<Void, Never>?
@@ -52,12 +53,14 @@ final class OnboardingFlow {
         settings: Settings,
         ollama: OllamaClient,
         relaunch: @escaping () -> Void,
+        quit: @escaping () -> Void,
         runCheck: @escaping (CheckReason) async -> Decision?
     ) {
         self.chat = chat
         self.scheduler = scheduler
         self.settings = settings
         relaunchHandler = relaunch
+        quitHandler = quit
         self.runCheck = runCheck
         isOllamaReady = {
             guard await ollama.isReachable() else { return false }
@@ -69,6 +72,7 @@ final class OnboardingFlow {
     func start() {
         cancelTasks()
         clearChatHandlers()
+        chat.onClose = settings.onboardingStep == .done ? nil : quitHandler
 
         switch settings.onboardingStep {
         case .welcome:
@@ -102,7 +106,7 @@ final class OnboardingFlow {
     }
 
     private func presentWelcome() {
-        chat.affordance = .onboardingNext
+        chat.affordance = .click
         chat.show(
             "Drill Sergeant reporting. I watch your screen and shout at you when you slack "
                 + "off. Everything runs on a local AI model, and your data never leaves your Mac.",
@@ -120,7 +124,7 @@ final class OnboardingFlow {
     /// vanished whenever the grant was inherited rather than this build's own.
     private func beginPermissionStep() {
         clearChatHandlers()
-        chat.affordance = .onboardingNext
+        chat.affordance = .click
         settings.onboardingStep = .permission
         permissionRequestAttempts = 0
         chat.show(
@@ -235,7 +239,7 @@ final class OnboardingFlow {
 
     private func presentRelaunchStep() {
         clearChatHandlers()
-        chat.affordance = .onboardingNext
+        chat.affordance = .click
         chat.show(
             "Permission granted. I have to restart to use it. Click here to restart.",
             autoHide: false
@@ -249,13 +253,12 @@ final class OnboardingFlow {
     /// Trigger that prompt only after an explicit tap, then discard the probe screenshot.
     private func presentDirectCapturePermissionStep() {
         clearChatHandlers()
-        chat.affordance = .onboardingNext
+        chat.affordance = .click
         settings.onboardingStep = .directCapturePermission
         settings.directCapturePermissionRequestPending = false
         chat.show(
             "One more permission: I need direct screen access so I can check your active window "
-                + "automatically without making you pick it every time. I take screenshots only "
-                + "— never audio — and keep them on this Mac. Click this bubble to grant it.",
+                + "automatically without making you pick it every time. Click this bubble to grant it.",
             autoHide: false
         )
         chat.onTap = { [weak self] in
@@ -297,7 +300,7 @@ final class OnboardingFlow {
 
     private func presentDirectCapturePermissionRetry() {
         clearChatHandlers()
-        chat.affordance = .onboardingNext
+        chat.affordance = .click
         chat.show(
             "Direct screen access still isn't available. Approve Drill Sergeant in System "
                 + "Settings, then click this bubble to try again.",
@@ -349,13 +352,8 @@ final class OnboardingFlow {
         guard settings.onboardingStep == .test else { return }
         pollingTask = nil
         chat.onTap = nil
-        chat.onReply = { [weak self] reply in
-            guard reply.trimmingCharacters(in: .whitespacesAndNewlines)
-                .localizedCaseInsensitiveCompare("done") == .orderedSame else {
-                return
-            }
-            self?.beginTestCheck()
-        }
+        chat.onReply = nil
+        chat.affordance = .display
         chat.show("Let's test it, open up YouTube.", autoHide: false)
         scheduler.enterWatching()
         startYouTubePolling()
@@ -417,6 +415,8 @@ final class OnboardingFlow {
         cancelTasks()
         clearChatHandlers()
         settings.onboardingStep = .done
+        chat.onClose = nil
+        chat.affordance = .reply
         chat.show(
             "That's how it works. Back to work — next check in "
                 + "\(settings.intervalMinutes) minutes.",
@@ -441,7 +441,7 @@ final class OnboardingFlow {
     private func clearChatHandlers() {
         chat.onReply = nil
         chat.onTap = nil
-        chat.affordance = .reply
+        chat.affordance = .display
     }
 
     private static func sleep(for interval: TimeInterval) async -> Bool {

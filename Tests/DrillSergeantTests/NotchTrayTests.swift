@@ -78,4 +78,17 @@ final class NotchTrayTests: XCTestCase {
         clock.advance(by: 0.1)
         XCTAssertFalse(controller.isExtended)
     }
+
+    func testExtensionChangesArePublishedForTrackingLifecycle() {
+        let clock = TestClock()
+        let controller = TrayController(clock: clock)
+        var changes: [Bool] = []
+        controller.onExtensionChange = { changes.append($0) }
+
+        clock.advance(by: 3)
+        controller.setHovering(true)
+        controller.setPinned(true)
+
+        XCTAssertEqual(changes, [false, true])
+    }
 }

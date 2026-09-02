@@ -34,6 +34,8 @@ final class BubbleWindow: NSPanel, ChatPresenter {
         didSet { model.onTap = onTap }
     }
 
+    var onClose: (() -> Void)?
+
     var affordance: BubbleAffordance {
         get { model.affordance }
         set {
@@ -168,7 +170,12 @@ final class BubbleWindow: NSPanel, ChatPresenter {
 
     private func connectModel() {
         model.onClose = { [weak self] in
-            self?.hide()
+            guard let self else { return }
+            if let onClose {
+                onClose()
+            } else {
+                hide()
+            }
         }
         model.onInputStateChange = { [weak self] isOpen in
             self?.inputStateDidChange(isOpen)
@@ -285,9 +292,9 @@ final class BubbleWindow: NSPanel, ChatPresenter {
 ///
 /// The bubble panel is non-activating, so it is rarely the key window and AppKit leaves the
 /// cursor to whatever window is underneath. Over a text area that means an I-beam. A
-/// `.cursorUpdate` tracking area works regardless of key status. Tap-to-advance onboarding
-/// bubbles use a pointing hand; ordinary bubbles restore the arrow. The reply field installs its
-/// own tracking area, so it still shows an I-beam when open.
+/// `.cursorUpdate` tracking area works regardless of key status. Click bubbles use a pointing
+/// hand; reply and display bubbles restore the arrow. The reply field installs its own tracking
+/// area, so it still shows an I-beam when open.
 @MainActor
 final class BubbleHostingView<Content: View>: NSHostingView<Content> {
     private var cursorTrackingArea: NSTrackingArea?

@@ -150,7 +150,7 @@ enum StateRenderer {
             name: "bubble-onboarding.png",
             text: "Drill Sergeant reporting. I watch your screen and shout at you when you slack off.",
             inputOpen: false,
-            affordance: .onboardingNext,
+            affordance: .click,
             size: bubbleInputSize,
             outputURL: outputURL,
             rendered: &rendered

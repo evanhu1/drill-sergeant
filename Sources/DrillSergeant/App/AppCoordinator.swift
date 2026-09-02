@@ -74,6 +74,9 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         notchWindow.onCheckNow = { [weak self] in self?.checkNow() }
         notchWindow.onDeveloper = { [weak self] in self?.showDeveloperToolbar() }
         notchWindow.onQuit = { [weak self] in self?.quit() }
+        notchWindow.onTrayExtensionChange = { [weak self] extended in
+            self?.updateCursorTracking(isTrayExtended: extended)
+        }
         chat.onVisibilityChange = { [weak eyesModel] visible in
             notchWindow.setTrayPinned(visible)
             guard let eyesModel else { return }
@@ -87,7 +90,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
             eyesModel?.attention = isOpen ? .typing : .cursor
         }
         notchWindow.showOnScreen()
-        cursorTracker.start()
+        updateCursorTracking(isTrayExtended: notchWindow.isTrayExtended)
 
         if ProcessInfo.processInfo.environment["DS_DEV"] == "1" {
             showDeveloperToolbar()
@@ -328,6 +331,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
             settings: settings,
             ollama: ollama,
             relaunch: { [weak self] in self?.relaunch() },
+            quit: { [weak self] in self?.quit() },
             runCheck: { [weak self] reason in
                 guard let self else { return nil }
                 return await self.enqueueCheck(reason)
@@ -345,8 +349,18 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
 
     private func installReplyHandler() {
         chat?.onTap = nil
+        chat?.onClose = nil
+        chat?.affordance = .reply
         chat?.onReply = { [weak self] text in
             self?.submitReply(text)
+        }
+    }
+
+    private func updateCursorTracking(isTrayExtended: Bool) {
+        if isTrayExtended {
+            cursorTracker?.start()
+        } else {
+            cursorTracker?.stop()
         }
     }
 
@@ -355,6 +369,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         guard !reply.isEmpty else { return }
         pendingReplyCount += 1
         chat?.onTap = nil
+        chat?.affordance = .display
         chat?.show("…", autoHide: false)
         enqueueModelWork { [weak self] in
             await self?.runReply(reply)
@@ -598,12 +613,14 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
 
         guard presentMessage, !decision.message.isEmpty else { return }
         chat?.onTap = nil
+        chat?.affordance = .reply
         chat?.show(decision.message, autoHide: decision.tool != .set_angry)
     }
 
     private func finishReply(with outcome: DecisionOutcome?) {
         pendingReplyCount = max(0, pendingReplyCount - 1)
         guard pendingReplyCount == 0 else {
+            chat?.affordance = .display
             chat?.show("…", autoHide: false)
             return
         }
@@ -618,6 +635,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
             chat?.hide()
         } else {
             chat?.onTap = nil
+            chat?.affordance = .reply
             chat?.show(
                 outcome.decision.message,
                 autoHide: outcome.decision.tool != .set_angry
@@ -627,6 +645,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
 
     private func showOllamaError(_ message: String) {
         chat?.onTap = nil
+        chat?.affordance = .reply
         chat?.show(message, autoHide: true)
     }
 
@@ -662,6 +681,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
     }
 
     private func presentPermissionRequest() {
+        chat?.affordance = .click
         chat?.show(
             "I need Screen Recording permission. Click here to grant it.",
             autoHide: false
@@ -683,14 +703,17 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
 
     private func resumeAfterScreenPermissionRequest() {
         chat?.onTap = nil
+        chat?.affordance = .display
         chat?.show("Checking Screen Recording permission…", autoHide: false)
         Task { @MainActor [weak self] in
             guard let self else { return }
             if await waitForScreenPermission() {
                 settings.screenPermissionRequestPending = false
                 scheduler?.start()
+                chat?.affordance = .reply
                 chat?.show("Permission granted. I'm back on watch.", autoHide: true)
             } else if ScreenPermission.isGranted() {
+                chat?.affordance = .click
                 chat?.show("Permission granted. Click here to restart me.", autoHide: false)
                 chat?.onTap = { [weak self] in self?.relaunch() }
             } else {
