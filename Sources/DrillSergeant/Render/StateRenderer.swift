@@ -73,14 +73,6 @@ enum StateRenderer {
             rendered: &rendered
         )
         try renderNotch(
-            name: "watching-scan.png",
-            state: .watching,
-            blinkProgress: 0,
-            scanPhase: 0.25,
-            outputURL: outputURL,
-            rendered: &rendered
-        )
-        try renderNotch(
             name: "idle-near.png",
             state: .idle,
             blinkProgress: 0,
@@ -148,7 +140,6 @@ enum StateRenderer {
         gaze: CGPoint? = nil,
         trayOffset: CGFloat = 0,
         proximity: CGFloat? = nil,
-        scanPhase: CGFloat? = nil,
         attention: EyeAttention? = nil,
         outputURL: URL,
         rendered: inout [(name: String, image: NSImage)]
@@ -166,7 +157,6 @@ enum StateRenderer {
                 gaze: gaze,
                 animationsEnabled: false,
                 proximity: proximity,
-                scanPhase: scanPhase,
                 attention: attention
             )
         }

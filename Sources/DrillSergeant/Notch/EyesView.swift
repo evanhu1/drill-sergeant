@@ -26,13 +26,10 @@ struct EyesView: View {
     var animationsEnabled = true
     /// Static inputs for renders. When set they replace the live, timed behaviour.
     var proximity: CGFloat? = nil
-    var scanPhase: CGFloat? = nil
     var attention: EyeAttention? = nil
 
     @State private var happyScale: CGFloat = 1
     @State private var saccade: CGPoint = .zero
-    @State private var liveScanPhase: CGFloat = 0
-    @State private var isScanning = false
     @State private var isGlancing = false
 
     private let scleraSize = CGSize(width: 22, height: 27)
@@ -58,10 +55,6 @@ struct EyesView: View {
         .task(id: model.state) {
             guard animationsEnabled else { return }
             await runSaccadesIfNeeded()
-        }
-        .task(id: model.state) {
-            guard animationsEnabled else { return }
-            await runScanIfNeeded()
         }
         .task(id: model.attention) {
             guard animationsEnabled else { return }
@@ -138,13 +131,10 @@ struct EyesView: View {
         )
     }
 
-    /// Final pupil direction after glance, scan and saccade are layered on.
+    /// Final pupil direction after the glance and saccade are layered on.
     private var lookGaze: CGPoint {
         if glancingAtBubble {
             return CGPoint(x: 0, y: 0.95)
-        }
-        if let phase = activeScanPhase {
-            return CGPoint(x: -0.8 + 1.6 * phase, y: 0.15)
         }
         return CGPoint(
             x: (baseGaze.x + saccade.x).clamped(to: -1 ... 1),
@@ -157,11 +147,6 @@ struct EyesView: View {
             return attention != .cursor
         }
         return isGlancing
-    }
-
-    private var activeScanPhase: CGFloat? {
-        if let scanPhase { return scanPhase.clamped(to: 0 ... 1) }
-        return isScanning ? liveScanPhase : nil
     }
 
     private var effectiveProximity: CGFloat {
@@ -184,17 +169,12 @@ struct EyesView: View {
 
     // MARK: - Lids
 
-    /// The lids lower while the eyes sweep the screen.
-    private var lidDrop: CGFloat {
-        activeScanPhase == nil ? 0 : 0.25
-    }
-
     private var blinkAmount: CGFloat {
         (blinkProgress ?? (model.isBlinking ? 1 : 0)).clamped(to: 0 ... 1)
     }
 
     private var eyelidProgress: CGFloat {
-        min(1, blinkAmount + lidDrop)
+        blinkAmount
     }
 
     private var scleraScale: CGFloat {
@@ -284,32 +264,6 @@ struct EyesView: View {
             }
         }
         saccade = .zero
-    }
-
-    /// On entering watching, the eyes sweep across the screen once, then lock onto the cursor.
-    private func runScanIfNeeded() async {
-        isScanning = false
-        liveScanPhase = 0
-        guard model.state == .watching else { return }
-
-        withAnimation(.easeInOut(duration: 0.2)) {
-            isScanning = true
-        }
-        do {
-            withAnimation(.easeInOut(duration: 0.9)) {
-                liveScanPhase = 1
-            }
-            try await sleep(seconds: 0.95)
-            withAnimation(.easeInOut(duration: 0.9)) {
-                liveScanPhase = 0
-            }
-            try await sleep(seconds: 0.95)
-        } catch {
-            // Cancelled by a state change; fall through and release the scan.
-        }
-        withAnimation(.easeInOut(duration: 0.25)) {
-            isScanning = false
-        }
     }
 
     /// A new message pulls the eyes down to the bubble briefly. Typing holds them there.

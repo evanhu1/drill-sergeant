@@ -262,7 +262,6 @@ struct NotchPanelContent: View {
     var gaze: CGPoint? = nil
     var animationsEnabled = true
     var proximity: CGFloat? = nil
-    var scanPhase: CGFloat? = nil
     var attention: EyeAttention? = nil
 
     var body: some View {
@@ -284,7 +283,6 @@ struct NotchPanelContent: View {
                     gaze: gaze,
                     animationsEnabled: animationsEnabled,
                     proximity: proximity,
-                    scanPhase: scanPhase,
                     attention: attention
                 )
                 .frame(height: panelHeight)
