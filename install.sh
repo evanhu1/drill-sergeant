@@ -1,14 +1,113 @@
 #!/bin/bash
+# Drill Sergeant installer.
+#
+#   curl -fsSL https://raw.githubusercontent.com/evanhu1/drill-sergeant/main/install.sh | bash
+#
+# Downloads a prebuilt app, sets up Ollama, and opens Drill Sergeant. Nothing else is
+# required: no Homebrew, no Xcode, no compiler. The 6 GB vision model is not downloaded
+# here — the app fetches it in the background while you grant Screen Recording, so the
+# notch fills in seconds instead of minutes.
+#
+#   DS_FROM_SOURCE=1   build from source instead of downloading a release
+#   DS_REF=<git ref>   source branch or tag to build (default: main)
+
 set -euo pipefail
 
-readonly REPOSITORY_URL="https://github.com/evanhu1/drill-sergeant.git"
+readonly REPOSITORY="evanhu1/drill-sergeant"
+readonly REPOSITORY_URL="https://github.com/${REPOSITORY}.git"
+readonly RELEASE_ASSET_URL="https://github.com/${REPOSITORY}/releases/latest/download/DrillSergeant.zip"
+readonly OLLAMA_DOWNLOAD_URL="https://ollama.com/download/Ollama-darwin.zip"
+readonly BUNDLE_IDENTIFIER="com.evanhu.drillsergeant"
+readonly APP_NAME="Drill Sergeant.app"
 readonly MINIMUM_MACOS_VERSION="14.0"
-readonly MINIMUM_OLLAMA_VERSION="0.12"
 readonly LOW_MEMORY_LIMIT_BYTES=8589934592
 
-progress() {
-    printf '==> %s\n' "$1"
+work_dir=""
+spinner_pid=""
+
+# ---------------------------------------------------------------- presentation
+
+if [[ -t 1 ]]; then
+    readonly DIM=$'\033[2m'
+    readonly BOLD=$'\033[1m'
+    readonly GREEN=$'\033[32m'
+    readonly RED=$'\033[31m'
+    readonly RESET=$'\033[0m'
+    readonly HIDE_CURSOR=$'\033[?25l'
+    readonly SHOW_CURSOR=$'\033[?25h'
+    readonly IS_TTY=1
+else
+    readonly DIM="" BOLD="" GREEN="" RED="" RESET="" HIDE_CURSOR="" SHOW_CURSOR=""
+    readonly IS_TTY=0
+fi
+
+spin() {
+    local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
+    local index=0
+    while true; do
+        printf '\r  %s%s%s  %s' "${DIM}" "${frames[index]}" "${RESET}" "$1"
+        index=$(((index + 1) % ${#frames[@]}))
+        sleep 0.08
+    done
 }
+
+# Starts a line that stays until `done_step` or `fail_step` replaces it.
+step() {
+    if ((IS_TTY)); then
+        printf '%s' "${HIDE_CURSOR}"
+        spin "$1" &
+        spinner_pid=$!
+    else
+        printf '  ... %s\n' "$1"
+    fi
+}
+
+stop_spinner() {
+    if [[ -n "${spinner_pid}" ]]; then
+        kill "${spinner_pid}" 2>/dev/null || true
+        wait "${spinner_pid}" 2>/dev/null || true
+        spinner_pid=""
+        printf '\r\033[2K%s' "${SHOW_CURSOR}"
+    fi
+}
+
+# Replaces the running step with a tick and an optional grey detail.
+done_step() {
+    stop_spinner
+    local detail="${2:-}"
+    if [[ -n "${detail}" ]]; then
+        printf '  %s✓%s  %-34s%s%s%s\n' \
+            "${GREEN}" "${RESET}" "$1" "${DIM}" "${detail}" "${RESET}"
+    else
+        printf '  %s✓%s  %s\n' "${GREEN}" "${RESET}" "$1"
+    fi
+}
+
+note() {
+    printf '  %s%s%s\n' "${DIM}" "$1" "${RESET}"
+}
+
+fail() {
+    stop_spinner
+    printf '  %s✗%s  %s\n\n' "${RED}" "${RESET}" "$1" >&2
+    shift || true
+    if [[ $# -gt 0 ]]; then
+        local line
+        for line in "$@"; do
+            printf '     %s\n' "${line}" >&2
+        done
+        printf '\n' >&2
+    fi
+    exit 1
+}
+
+cleanup() {
+    stop_spinner
+    [[ -n "${work_dir}" && -d "${work_dir}" ]] && rm -rf "${work_dir}"
+    printf '%s' "${SHOW_CURSOR}"
+}
+
+# ---------------------------------------------------------------------- checks
 
 version_at_least() {
     local current="${1#v}"
@@ -47,175 +146,258 @@ version_at_least() {
     return 0
 }
 
-ollama_version() {
-    ollama --version 2>/dev/null \
-        | grep -Eo '[0-9]+([.][0-9]+)+' \
-        | head -n 1
-}
-
 ollama_is_running() {
-    curl -fsS "http://127.0.0.1:11434/api/tags" >/dev/null 2>&1
+    curl -fsS --max-time 2 "http://127.0.0.1:11434/api/tags" >/dev/null 2>&1
 }
 
-physical_memory_bytes() {
-    sysctl -n hw.memsize 2>/dev/null || printf '0\n'
-}
-
-configure_low_memory_ollama() {
-    progress "Configuring Ollama for an 8 GB Mac"
-    if launchctl setenv OLLAMA_FLASH_ATTENTION 1 \
-        && launchctl setenv OLLAMA_KV_CACHE_TYPE q4_0 \
-        && launchctl setenv OLLAMA_NUM_PARALLEL 1 \
-        && launchctl setenv OLLAMA_MAX_LOADED_MODELS 1; then
-        return 0
-    fi
-
-    printf '%s\n' \
-        'Could not set low-memory Ollama options. See the README for manual setup.' >&2
+ollama_app_path() {
+    local candidate
+    for candidate in "/Applications/Ollama.app" "${HOME}/Applications/Ollama.app"; do
+        if [[ -d "${candidate}" ]]; then
+            printf '%s\n' "${candidate}"
+            return 0
+        fi
+    done
     return 1
 }
 
-checkout_path() {
-    local script_source="${BASH_SOURCE[0]:-}"
-    local script_dir=""
+# ----------------------------------------------------------------------- setup
 
-    if [[ -n "${script_source}" && -f "${script_source}" ]]; then
-        script_dir="$(cd "$(dirname "${script_source}")" && pwd)"
-    fi
+# Ollama's own download works without Homebrew, so nothing has to be installed first.
+install_ollama() {
+    local archive="${work_dir}/Ollama-darwin.zip"
+    local staging="${work_dir}/ollama"
+    local destination="/Applications"
 
-    if [[ -n "${script_dir}" && -f "${script_dir}/Scripts/bundle.sh" ]]; then
-        printf '%s\n' "${script_dir}"
-    elif [[ -f "${PWD}/Scripts/bundle.sh" ]]; then
-        printf '%s\n' "${PWD}"
-    fi
+    curl -fsL --retry 3 --retry-delay 1 -o "${archive}" "${OLLAMA_DOWNLOAD_URL}" \
+        2>/dev/null || return 1
+    mkdir -p "${staging}"
+    ditto -x -k "${archive}" "${staging}" 2>/dev/null || return 1
+    [[ -d "${staging}/Ollama.app" ]] || return 1
+
+    [[ -w "${destination}" ]] || destination="${HOME}/Applications"
+    mkdir -p "${destination}"
+    rm -rf "${destination}/Ollama.app"
+    ditto "${staging}/Ollama.app" "${destination}/Ollama.app" 2>/dev/null || return 1
+    xattr -dr com.apple.quarantine "${destination}/Ollama.app" 2>/dev/null || true
 }
 
-main() {
-    local architecture
-    local macos_version
-    local current_ollama_version
-    local model
-    local source_dir
-    local local_checkout
-    local install_root
-    local app_source
-    local ollama_ready=0
+start_ollama() {
+    local app_path
+    if app_path="$(ollama_app_path)"; then
+        open -a "${app_path}" 2>/dev/null || true
+    elif command -v ollama >/dev/null 2>&1; then
+        nohup ollama serve >/dev/null 2>&1 &
+    fi
+
     local attempt
-    local memory_bytes
-    local low_memory_mode=0
-    local ollama_was_running=0
+    for ((attempt = 1; attempt <= 60; attempt += 1)); do
+        ollama_is_running && return 0
+        sleep 0.5
+    done
+    return 1
+}
 
-    progress "Checking Mac requirements"
-    architecture="$(uname -m)"
-    if [[ "${architecture}" != "arm64" ]]; then
-        printf 'Drill Sergeant requires an Apple Silicon Mac (arm64).\n' >&2
-        exit 1
-    fi
-
-    macos_version="$(sw_vers -productVersion)"
-    if ! version_at_least "${macos_version}" "${MINIMUM_MACOS_VERSION}"; then
-        printf 'Drill Sergeant requires macOS 14 or newer. Found macOS %s.\n' \
-            "${macos_version}" >&2
-        exit 1
-    fi
-
-    memory_bytes="$(physical_memory_bytes)"
-    if [[ "${memory_bytes}" =~ ^[0-9]+$ ]] \
-        && ((memory_bytes <= LOW_MEMORY_LIMIT_BYTES)); then
-        low_memory_mode=1
+# Runs the whole Ollama path in one background job so it overlaps the app download.
+prepare_ollama() {
+    local status_file="$1"
+    {
         if ollama_is_running; then
-            ollama_was_running=1
+            printf 'running\n' >"${status_file}"
+            exit 0
         fi
-        configure_low_memory_ollama || true
-    fi
+        if ollama_app_path >/dev/null || command -v ollama >/dev/null 2>&1; then
+            if start_ollama; then
+                printf 'started\n' >"${status_file}"
+            else
+                printf 'unreachable\n' >"${status_file}"
+            fi
+            exit 0
+        fi
+        if ! install_ollama; then
+            printf 'install-failed\n' >"${status_file}"
+            exit 0
+        fi
+        if start_ollama; then
+            printf 'installed\n' >"${status_file}"
+        else
+            printf 'unreachable\n' >"${status_file}"
+        fi
+    } &
+    printf '%s\n' "$!"
+}
 
-    progress "Checking Xcode Command Line Tools"
+# 8 GB Macs need Flash Attention and a quantized KV cache to hold the model at all.
+configure_low_memory_ollama() {
+    launchctl setenv OLLAMA_FLASH_ATTENTION 1 2>/dev/null || return 1
+    launchctl setenv OLLAMA_KV_CACHE_TYPE q4_0 2>/dev/null || return 1
+    launchctl setenv OLLAMA_NUM_PARALLEL 1 2>/dev/null || return 1
+    launchctl setenv OLLAMA_MAX_LOADED_MODELS 1 2>/dev/null || return 1
+}
+
+# ------------------------------------------------------------------------- app
+
+download_release() {
+    local archive="${work_dir}/DrillSergeant.zip"
+    local staging="${work_dir}/app"
+
+    curl -fsL --retry 2 --retry-delay 1 -o "${archive}" "${RELEASE_ASSET_URL}" 2>/dev/null \
+        || return 1
+    mkdir -p "${staging}"
+    ditto -x -k "${archive}" "${staging}" 2>/dev/null || return 1
+    [[ -d "${staging}/${APP_NAME}" ]] || return 1
+    printf '%s\n' "${staging}/${APP_NAME}"
+}
+
+build_from_source() {
     if ! xcode-select -p >/dev/null 2>&1; then
         xcode-select --install >/dev/null 2>&1 || true
-        printf 'Install the Xcode Command Line Tools, then run this installer again.\n' >&2
-        exit 1
+        fail "Building from source needs the Xcode Command Line Tools" \
+            "A macOS installer window should have opened. Finish it, then run this again." \
+            "Or skip the build: leave DS_FROM_SOURCE unset to download a prebuilt app."
     fi
 
-    progress "Checking Homebrew"
-    if ! command -v brew >/dev/null 2>&1; then
-        printf '%s\n' 'Homebrew is required. Install it, then run this installer again:' >&2
-        printf '%s\n' '/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' >&2
-        exit 1
-    fi
-
-    progress "Checking Ollama"
-    if ! command -v ollama >/dev/null 2>&1; then
-        brew install --cask ollama
-        hash -r
+    local source_dir="${HOME}/.drill-sergeant/src"
+    local ref="${DS_REF:-main}"
+    if [[ -d "${source_dir}/.git" ]]; then
+        git -C "${source_dir}" fetch --depth 1 origin "${ref}" >/dev/null 2>&1
+        git -C "${source_dir}" checkout --force FETCH_HEAD >/dev/null 2>&1
     else
-        current_ollama_version="$(ollama_version || true)"
-        if [[ -z "${current_ollama_version}" ]] \
-            || ! version_at_least "${current_ollama_version}" "${MINIMUM_OLLAMA_VERSION}"; then
-            brew upgrade --cask ollama || brew upgrade ollama || true
-            hash -r
-            current_ollama_version="$(ollama_version || true)"
-            if [[ -z "${current_ollama_version}" ]] \
-                || ! version_at_least "${current_ollama_version}" "${MINIMUM_OLLAMA_VERSION}"; then
-                printf '%s\n' 'Update Ollama from https://ollama.com/download' >&2
-            fi
-        fi
+        mkdir -p "$(dirname "${source_dir}")"
+        git clone --depth 1 --branch "${ref}" "${REPOSITORY_URL}" "${source_dir}" \
+            >/dev/null 2>&1
+    fi
+    # Quiet on success, loud on failure: a build log is only useful when it breaks.
+    local build_log="${work_dir}/build.log"
+    if ! "${source_dir}/Scripts/bundle.sh" >"${build_log}" 2>&1; then
+        stop_spinner
+        cat "${build_log}" >&2
+        fail "The build failed"
+    fi
+    printf '%s\n' "${source_dir}/build/${APP_NAME}"
+}
+
+code_hash() {
+    codesign -dvvv "$1" 2>&1 | awk -F'=' '/^CDHash=/ {print $2; exit}'
+}
+
+app_version() {
+    defaults read "$1/Contents/Info" CFBundleShortVersionString 2>/dev/null || printf '?\n'
+}
+
+# Each build carries a different ad-hoc signature, and macOS pins the Screen Recording
+# grant to the signature. A stale grant reads as allowed while capture quietly fails, so
+# clear it whenever the code actually changed and let the app ask again.
+reset_stale_screen_grant() {
+    local installed="$1"
+    local incoming="$2"
+    [[ -d "${installed}" ]] || return 0
+    [[ "$(code_hash "${installed}")" == "$(code_hash "${incoming}")" ]] && return 0
+    tccutil reset ScreenCapture "${BUNDLE_IDENTIFIER}" >/dev/null 2>&1 || true
+}
+
+install_app() {
+    local source_app="$1"
+    local destination="/Applications"
+    [[ -w "${destination}" ]] || destination="${HOME}/Applications"
+    mkdir -p "${destination}"
+
+    local installed="${destination}/${APP_NAME}"
+    reset_stale_screen_grant "${installed}" "${source_app}"
+
+    pkill -f "${APP_NAME}/Contents/MacOS/DrillSergeant" 2>/dev/null || true
+    rm -rf "${installed}"
+    ditto "${source_app}" "${installed}" 2>/dev/null
+    xattr -dr com.apple.quarantine "${installed}" 2>/dev/null || true
+    printf '%s\n' "${installed}"
+}
+
+# ------------------------------------------------------------------------ main
+
+main() {
+    trap cleanup EXIT INT TERM
+    work_dir="$(mktemp -d)"
+
+    printf '\n  %sDrill Sergeant%s\n\n' "${BOLD}" "${RESET}"
+
+    if [[ "$(uname -m)" != "arm64" ]]; then
+        fail "Drill Sergeant needs an Apple Silicon Mac" \
+            "The local vision model has no Intel build."
+    fi
+    local macos_version
+    macos_version="$(sw_vers -productVersion)"
+    if ! version_at_least "${macos_version}" "${MINIMUM_MACOS_VERSION}"; then
+        fail "Drill Sergeant needs macOS 14 or newer (this Mac runs ${macos_version})"
     fi
 
-    progress "Starting Ollama"
-    if ! ollama_is_running; then
-        if [[ -d "/Applications/Ollama.app" || -d "${HOME}/Applications/Ollama.app" ]]; then
-            open -a Ollama
-        else
-            nohup ollama serve >/dev/null 2>&1 &
-        fi
+    local memory_bytes
+    local low_memory=0
+    memory_bytes="$(sysctl -n hw.memsize 2>/dev/null || printf '0')"
+    if [[ "${memory_bytes}" =~ ^[0-9]+$ ]] && ((memory_bytes <= LOW_MEMORY_LIMIT_BYTES)); then
+        low_memory=1
     fi
+    local memory_note
+    memory_note="$(((memory_bytes + 1073741823) / 1073741824)) GB"
+    done_step "Apple Silicon, macOS ${macos_version}" "${memory_note}"
 
-    for ((attempt = 1; attempt <= 30; attempt += 1)); do
-        if ollama_is_running; then
-            ollama_ready=1
-            break
-        fi
-        sleep 1
-    done
-    if [[ "${ollama_ready}" -ne 1 ]]; then
-        printf 'Ollama did not start within 30 seconds. Start Ollama and rerun this installer.\n' >&2
-        exit 1
-    fi
+    local ollama_was_running=0
+    ollama_is_running && ollama_was_running=1
+    ((low_memory)) && configure_low_memory_ollama || true
 
-    model="${DS_MODEL:-qwen3-vl:8b}"
-    progress "Downloading local model ${model}"
-    ollama pull "${model}"
+    # Ollama is ~200 MB. Fetch it while the app downloads rather than after.
+    local ollama_status_file="${work_dir}/ollama.status"
+    local ollama_pid
+    ollama_pid="$(prepare_ollama "${ollama_status_file}")"
 
-    progress "Preparing Drill Sergeant source"
-    local_checkout="$(checkout_path)"
-    if [[ -n "${local_checkout}" ]]; then
-        source_dir="${local_checkout}"
+    local source_app=""
+    if [[ "${DS_FROM_SOURCE:-0}" == "1" ]]; then
+        step "Building Drill Sergeant from source"
+        source_app="$(build_from_source)"
+        done_step "Built Drill Sergeant" "$(app_version "${source_app}")"
     else
-        install_root="${HOME}/.drill-sergeant"
-        source_dir="${install_root}/src"
-        if [[ -d "${source_dir}/.git" ]]; then
-            git -C "${source_dir}" pull --ff-only
+        step "Downloading Drill Sergeant"
+        if source_app="$(download_release)"; then
+            done_step "Downloaded Drill Sergeant" "$(app_version "${source_app}")"
         else
-            mkdir -p "${install_root}"
-            git clone "${REPOSITORY_URL}" "${source_dir}"
+            stop_spinner
+            step "No release yet — building from source"
+            source_app="$(build_from_source)"
+            done_step "Built Drill Sergeant" "$(app_version "${source_app}")"
         fi
     fi
 
-    progress "Building Drill Sergeant"
-    "${source_dir}/Scripts/bundle.sh"
+    step "Installing"
+    local installed_app
+    installed_app="$(install_app "${source_app}")"
+    done_step "Installed" "${installed_app/#${HOME}/~}"
 
-    progress "Installing Drill Sergeant in /Applications"
-    app_source="${source_dir}/build/Drill Sergeant.app"
-    rm -rf "/Applications/Drill Sergeant.app"
-    cp -R "${app_source}" "/Applications/Drill Sergeant.app"
+    step "Setting up Ollama"
+    wait "${ollama_pid}" 2>/dev/null || true
+    local ollama_status
+    ollama_status="$(cat "${ollama_status_file}" 2>/dev/null || printf 'unreachable')"
+    case "${ollama_status}" in
+        running) done_step "Ollama running" "already up" ;;
+        started) done_step "Ollama running" "started for you" ;;
+        installed) done_step "Ollama running" "installed and started" ;;
+        install-failed)
+            done_step "Ollama not installed"
+            note "Install it from https://ollama.com/download — the app waits for it."
+            ;;
+        *)
+            done_step "Ollama not responding"
+            note "Open Ollama once; the app connects on its own."
+            ;;
+    esac
 
-    progress "Launching Drill Sergeant"
-    open -n "/Applications/Drill Sergeant.app"
-    if [[ "${low_memory_mode}" -eq 1 && "${ollama_was_running}" -eq 1 ]]; then
-        printf '%s\n' \
-            'Restart Ollama once to activate Flash Attention and quantized KV cache.'
+    open -n "${installed_app}"
+
+    printf '\n  %sHe is in your notch.%s Follow the bubble.\n' "${BOLD}" "${RESET}"
+    note "The 6 GB vision model downloads in the background while you grant permission."
+    if ((low_memory && ollama_was_running)); then
+        printf '\n'
+        note "8 GB Mac: quit and reopen Ollama once to apply its low-memory settings."
     fi
-    progress "Drill Sergeant is in your notch. Follow the chat bubble."
+    printf '\n'
 }
 
 if [[ -z "${BASH_SOURCE[0]:-}" || "${BASH_SOURCE[0]}" == "$0" ]]; then

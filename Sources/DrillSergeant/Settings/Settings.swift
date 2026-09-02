@@ -12,6 +12,7 @@ final class Settings {
         static let screenPermissionRequestPending = "ds.screenPermissionRequestPending"
         static let directCapturePermissionRequestPending =
             "ds.directCapturePermissionRequestPending"
+        static let didAutoRelaunchForPermission = "ds.didAutoRelaunchForPermission"
         static let userPreferences = "ds.userPreferences"
         static let workHours = "ds.workHours"
         static let retiredSetting = String(
@@ -34,6 +35,7 @@ final class Settings {
             defaults.removeObject(forKey: Key.onboardingStep)
             defaults.removeObject(forKey: Key.screenPermissionRequestPending)
             defaults.removeObject(forKey: Key.directCapturePermissionRequestPending)
+            defaults.removeObject(forKey: Key.didAutoRelaunchForPermission)
         }
     }
 
@@ -96,6 +98,13 @@ final class Settings {
     var directCapturePermissionRequestPending: Bool {
         get { defaults.bool(forKey: Key.directCapturePermissionRequestPending) }
         set { defaults.set(newValue, forKey: Key.directCapturePermissionRequestPending) }
+    }
+
+    /// Set once the app has restarted itself to pick up a Screen Recording grant. A second
+    /// automatic restart would only loop, so the next one is offered as a button instead.
+    var didAutoRelaunchForPermission: Bool {
+        get { defaults.bool(forKey: Key.didAutoRelaunchForPermission) }
+        set { defaults.set(newValue, forKey: Key.didAutoRelaunchForPermission) }
     }
 
     var hasPendingPermissionRequest: Bool {

@@ -13,6 +13,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
     private var chat: BubbleWindow?
     private var scheduler: Scheduler?
     private var ollama: OllamaClient?
+    private var modelReadiness: ModelReadiness?
     private var conversation: Conversation?
     private var cursorTracker: CursorTracker?
     private var onboarding: OnboardingFlow?
@@ -62,13 +63,22 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
             windowProvider: { [weak notchWindow] in notchWindow }
         )
 
+        // Started before anything else: the model download is the long pole, and it should
+        // run while the user reads the first bubble rather than after.
+        let modelReadiness = ModelReadiness(ollama: ollama)
+        modelReadiness.onChange = { [weak self] state in
+            self?.modelReadinessDidChange(state)
+        }
+
         self.eyesModel = eyesModel
         self.notchWindow = notchWindow
         self.chat = chat
         self.scheduler = scheduler
         self.ollama = ollama
+        self.modelReadiness = modelReadiness
         self.conversation = conversation
         self.cursorTracker = cursorTracker
+        modelReadiness.start()
 
         scheduler.delegate = self
         notchWindow.onCheckNow = { [weak self] in self?.checkNow() }
@@ -108,9 +118,11 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
                 resumeAfterScreenPermissionRequest()
             } else {
                 scheduler.start()
+                verifyScreenPermission()
             }
+            LoginItem.enable()
         } else {
-            startOnboarding(chat: chat, scheduler: scheduler, ollama: ollama)
+            startOnboarding(chat: chat, scheduler: scheduler)
         }
     }
 
@@ -250,8 +262,8 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
 
         if let onboarding {
             onboarding.start()
-        } else if let chat, let scheduler, let ollama {
-            startOnboarding(chat: chat, scheduler: scheduler, ollama: ollama)
+        } else if let chat, let scheduler {
+            startOnboarding(chat: chat, scheduler: scheduler)
         }
     }
 
@@ -323,14 +335,12 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
 
     private func startOnboarding(
         chat: BubbleWindow,
-        scheduler: Scheduler,
-        ollama: OllamaClient
+        scheduler: Scheduler
     ) {
         let onboarding = OnboardingFlow(
             chat: chat,
             scheduler: scheduler,
             settings: settings,
-            ollama: ollama,
             relaunch: { [weak self] in self?.relaunch() },
             quit: { [weak self] in self?.quit() },
             skip: { [weak self] in self?.skipOnboarding() },
@@ -339,14 +349,38 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
                 return await self.enqueueCheck(reason)
             }
         )
+        onboarding.modelState = { [weak self] in
+            self?.modelReadiness?.state ?? .ready
+        }
         onboarding.onFinished = { [weak self, weak onboarding] in
             guard let self, self.onboarding === onboarding else { return }
             self.onboarding = nil
             self.installReplyHandler()
+            // Registered only once someone has actually finished setup, so a person who
+            // quits during onboarding is not left with a login item they never wanted.
+            LoginItem.enable()
             Log.info("Onboarding finished")
         }
         self.onboarding = onboarding
         onboarding.start()
+    }
+
+    /// Every update ships a new ad-hoc signature, and macOS pins the Screen Recording
+    /// grant to the old one. Left alone that reads as allowed while capture fails, and the
+    /// user finds out at the next check. Ask at launch instead, so an update stays silent
+    /// only when it actually worked.
+    private func verifyScreenPermission() {
+        Task { @MainActor [weak self] in
+            let works = await ScreenPermission.probe()
+            guard let self, !works else { return }
+            guard settings.onboardingStep == .done, pendingReplyCount == 0 else { return }
+            Log.warn("Screen Recording no longer works for this build")
+            presentPermissionRequest()
+        }
+    }
+
+    private func modelReadinessDidChange(_ state: ModelReadinessState) {
+        onboarding?.modelStateDidChange(state)
     }
 
     private func installReplyHandler() {

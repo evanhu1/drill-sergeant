@@ -449,3 +449,90 @@ actor OllamaClient {
         return text.contains("model") && text.contains("not found")
     }
 }
+
+/// One line of `/api/pull` progress.
+struct ModelDownloadProgress: Equatable {
+    let status: String
+    let completed: Int64
+    let total: Int64
+
+    /// Nil until Ollama starts reporting layer sizes.
+    var fraction: Double? {
+        guard total > 0 else { return nil }
+        return min(1, max(0, Double(completed) / Double(total)))
+    }
+
+    /// "3.4 of 6.1 GB", or nil while sizes are unknown.
+    var sizeSummary: String? {
+        guard total > 0 else { return nil }
+        let gigabyte = 1_073_741_824.0
+        return String(
+            format: "%.1f of %.1f GB",
+            Double(completed) / gigabyte,
+            Double(total) / gigabyte
+        )
+    }
+}
+
+extension OllamaClient {
+    /// Downloads the model, reporting progress as Ollama streams it.
+    ///
+    /// Ollama answers `/api/pull` with one JSON object per line and reports `completed` and
+    /// `total` per layer, so the numbers step backwards between layers. The largest total
+    /// seen is the model download, which is the only part worth showing.
+    func pullModel(
+        onProgress: @escaping @Sendable (ModelDownloadProgress) -> Void
+    ) async throws {
+        let payload: [String: Any] = ["model": model, "stream": true]
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
+            throw OllamaError.badResponse("Could not encode pull request")
+        }
+
+        var request = URLRequest(url: endpoint("api/pull"))
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+        // A 6 GB download outlives the chat timeouts this client uses elsewhere.
+        request.timeoutInterval = 3_600
+
+        let lines: URLSession.AsyncBytes
+        let response: URLResponse
+        do {
+            (lines, response) = try await session.bytes(for: request)
+        } catch {
+            throw OllamaError.unreachable
+        }
+
+        if let http = response as? HTTPURLResponse,
+           !(200..<300).contains(http.statusCode) {
+            throw OllamaError.http(http.statusCode)
+        }
+
+        var sawSuccess = false
+        for try await line in lines.lines {
+            guard let data = line.data(using: .utf8),
+                  let object = try? JSONSerialization.jsonObject(with: data)
+                      as? [String: Any] else {
+                continue
+            }
+            if let message = object["error"] as? String {
+                throw OllamaError.badResponse(message)
+            }
+            let status = object["status"] as? String ?? ""
+            if status == "success" {
+                sawSuccess = true
+            }
+            onProgress(
+                ModelDownloadProgress(
+                    status: status,
+                    completed: (object["completed"] as? NSNumber)?.int64Value ?? 0,
+                    total: (object["total"] as? NSNumber)?.int64Value ?? 0
+                )
+            )
+        }
+
+        guard sawSuccess else {
+            throw OllamaError.badResponse("Model download ended before it finished")
+        }
+    }
+}

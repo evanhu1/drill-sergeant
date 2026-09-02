@@ -3,86 +3,36 @@ import XCTest
 
 @MainActor
 final class OnboardingFlowTests: XCTestCase {
-    func testWelcomeShowsPersistentMessageAndTapAdvances() async {
+    // MARK: - One bubble, one click
+
+    func testFirstBubbleAsksForPermissionAndIsTheOnlyClick() async {
         let (settings, defaults, suiteName) = makeSettings()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let chat = FakeChatPresenter()
-        let scheduler = Scheduler(clock: TestClock())
-        let flow = makeFlow(chat: chat, scheduler: scheduler, settings: settings)
+        let flow = makeFlow(chat: chat, settings: settings)
         flow.isPermissionGranted = { false }
         flow.pollInterval = 0.001
 
         flow.start()
 
-        XCTAssertEqual(settings.onboardingStep, .welcome)
-        XCTAssertEqual(
-            chat.lastShown?.text,
-            "Drill Sergeant reporting. I watch your screen and shout at you when you slack "
-                + "off. Everything runs on a local AI model, and your data never leaves your Mac."
-        )
+        XCTAssertEqual(chat.lastShown?.text, OnboardingFlow.introText)
+        XCTAssertTrue(chat.lastShown?.text.contains("Click here") ?? false)
         XCTAssertEqual(chat.lastShown?.autoHide, false)
         XCTAssertEqual(chat.affordance, .click)
-        XCTAssertTrue(chat.askedMessages.isEmpty)
-        XCTAssertNil(chat.onReply)
+        XCTAssertEqual(settings.onboardingStep, .permission)
         XCTAssertNotNil(chat.onTap)
         XCTAssertNotNil(chat.onClose)
-        XCTAssertTrue(defaults.persistentDomain(forName: suiteName)?.isEmpty ?? true)
-
-        chat.onTap?()
-
-        XCTAssertEqual(settings.onboardingStep, .permission)
-        XCTAssertEqual(chat.affordance, .click)
-        XCTAssertTrue(chat.shownMessages.contains { $0.text.contains("Screen Recording") })
-        XCTAssertFalse(chat.lastShown?.text.hasPrefix("Good.") ?? true)
-        XCTAssertEqual(
-            defaults.persistentDomain(forName: suiteName) as? [String: String],
-            ["ds.onboardingStep": OnboardingStep.permission.rawValue]
-        )
-
-        let resumedChat = FakeChatPresenter()
-        let resumedFlow = makeFlow(
-            chat: resumedChat,
-            scheduler: Scheduler(clock: TestClock()),
-            settings: settings
-        )
-        resumedFlow.isPermissionGranted = { false }
-        resumedFlow.start()
-
-        XCTAssertTrue(resumedChat.shownMessages.contains { $0.text.contains("Screen Recording") })
-        XCTAssertFalse(resumedChat.shownMessages.contains { $0.text.contains("Drill Sergeant reporting") })
+        XCTAssertNil(chat.onReply)
     }
 
-    func testCloseDuringOnboardingQuits() {
-        let (settings, defaults, suiteName) = makeSettings()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        let chat = FakeChatPresenter()
-        var quitCount = 0
-        let flow = makeFlow(
-            chat: chat,
-            scheduler: Scheduler(clock: TestClock()),
-            settings: settings,
-            quit: { quitCount += 1 }
-        )
-
-        flow.start()
-        chat.onClose?()
-
-        XCTAssertEqual(quitCount, 1)
-    }
-
-    /// The step used to disappear whenever `isPermissionGranted()` said yes, which is exactly what
-    /// an inherited grant reports. It is always shown now, and nothing is asked for until a tap.
+    /// Nothing may be requested before the user presses the bubble.
     func testPermissionStepIsShownEvenWhenPreflightSaysGranted() async {
         let (settings, defaults, suiteName) = makeSettings()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         settings.onboardingStep = .permission
         let chat = FakeChatPresenter()
         var didRequest = false
-        let flow = makeFlow(
-            chat: chat,
-            scheduler: Scheduler(clock: TestClock()),
-            settings: settings
-        )
+        let flow = makeFlow(chat: chat, settings: settings)
         flow.isPermissionGranted = { true }
         flow.probePermission = { true }
         flow.requestPermission = { didRequest = true; return true }
@@ -90,46 +40,95 @@ final class OnboardingFlowTests: XCTestCase {
 
         flow.start()
 
-        XCTAssertTrue(chat.shownMessages.contains { $0.text.contains("Screen Recording") })
+        XCTAssertEqual(chat.lastShown?.text, OnboardingFlow.introText)
         XCTAssertEqual(settings.onboardingStep, .permission)
         XCTAssertFalse(didRequest)
     }
 
-    func testTapAdvancesToDirectCapturePermissionWhenScreenPermissionWorks() async {
+    func testCloseDuringOnboardingQuits() {
+        let (settings, defaults, suiteName) = makeSettings()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let chat = FakeChatPresenter()
+        var quitCount = 0
+        let flow = makeFlow(chat: chat, settings: settings, quit: { quitCount += 1 })
+
+        flow.start()
+        chat.onClose?()
+
+        XCTAssertEqual(quitCount, 1)
+    }
+
+    // MARK: - Direct capture follows on its own
+
+    /// The second macOS prompt belongs to the same request, so no bubble sits between them.
+    func testGrantChainsStraightIntoDirectCaptureWithoutAnotherTap() async {
         let (settings, defaults, suiteName) = makeSettings()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         settings.onboardingStep = .permission
         let chat = FakeChatPresenter()
-        let flow = makeFlow(
-            chat: chat,
-            scheduler: Scheduler(clock: TestClock()),
-            settings: settings
-        )
+        var directRequestCount = 0
+        let flow = makeFlow(chat: chat, settings: settings)
         flow.isPermissionGranted = { true }
         flow.probePermission = { true }
-        flow.isOllamaReady = { false }
+        flow.requestDirectCapturePermission = { directRequestCount += 1; return true }
+        flow.modelState = { .waitingForOllama }
         flow.pollInterval = 0.001
 
         flow.start()
         chat.onTap?()
 
-        await waitUntil { settings.onboardingStep == .directCapturePermission }
-        XCTAssertFalse(chat.shownMessages.contains { $0.text.contains("restart") })
-        XCTAssertEqual(chat.affordance, .click)
-        XCTAssertTrue(chat.lastShown?.text.contains("direct screen access") ?? false)
+        await waitUntil { settings.onboardingStep == .test }
+        XCTAssertEqual(directRequestCount, 1)
+        XCTAssertEqual(chat.tapHandlerAssignments.filter { $0 }.count, 1)
+        XCTAssertFalse(chat.shownMessages.contains { $0.text.contains("Click this bubble") })
+        XCTAssertFalse(settings.directCapturePermissionRequestPending)
     }
 
-    /// Recorded by macOS but not usable by this process yet: that is the case a relaunch fixes.
-    func testGrantedButNotYetWorkingAsksForARelaunch() async {
+    func testDirectCaptureRequestIsMarkedPendingBeforeItRuns() async {
+        let (settings, defaults, suiteName) = makeSettings()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        settings.onboardingStep = .directCapturePermission
+        let chat = FakeChatPresenter()
+        let flow = makeFlow(chat: chat, settings: settings)
+        flow.requestDirectCapturePermission = {
+            XCTAssertTrue(settings.directCapturePermissionRequestPending)
+            return true
+        }
+        flow.modelState = { .waitingForOllama }
+
+        flow.start()
+
+        XCTAssertEqual(chat.lastShown?.text, "Checking direct screen access…")
+        await waitUntil { settings.onboardingStep == .test }
+    }
+
+    func testDeniedDirectCapturePermissionOffersARetry() async {
+        let (settings, defaults, suiteName) = makeSettings()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        settings.onboardingStep = .directCapturePermission
+        let chat = FakeChatPresenter()
+        let flow = makeFlow(chat: chat, settings: settings)
+        flow.requestDirectCapturePermission = { false }
+
+        flow.start()
+
+        await waitUntil { chat.lastShown?.text.contains("still isn't available") == true }
+        XCTAssertEqual(settings.onboardingStep, .directCapturePermission)
+        XCTAssertFalse(settings.directCapturePermissionRequestPending)
+        XCTAssertEqual(chat.affordance, .click)
+        XCTAssertNotNil(chat.onTap)
+    }
+
+    // MARK: - Restart
+
+    /// The restart is bookkeeping, so the app does it rather than asking.
+    func testGrantedButNotYetWorkingRestartsItself() async {
         let (settings, defaults, suiteName) = makeSettings()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         settings.onboardingStep = .permission
         let chat = FakeChatPresenter()
-        let flow = makeFlow(
-            chat: chat,
-            scheduler: Scheduler(clock: TestClock()),
-            settings: settings
-        )
+        var relaunchCount = 0
+        let flow = makeFlow(chat: chat, settings: settings, relaunch: { relaunchCount += 1 })
         var granted = false
         flow.isPermissionGranted = { granted }
         flow.probePermission = { false }
@@ -139,61 +138,38 @@ final class OnboardingFlowTests: XCTestCase {
         flow.start()
         chat.onTap?()
 
-        await waitUntil { settings.onboardingStep == .relaunch }
+        await waitUntil { relaunchCount == 1 }
+        XCTAssertEqual(settings.onboardingStep, .relaunch)
         XCTAssertTrue(settings.screenPermissionRequestPending)
-        XCTAssertEqual(chat.affordance, .click)
-        XCTAssertTrue(chat.shownMessages.contains { $0.text.contains("restart") })
+        XCTAssertTrue(settings.didAutoRelaunchForPermission)
+        XCTAssertEqual(chat.lastShown?.text, "Permission granted. Restarting myself…")
+        XCTAssertNil(chat.onTap)
     }
 
-    func testPermissionRequestPersistsResumePointBeforeCallingSystemAPI() async {
+    /// A second automatic restart would only loop, so it becomes a button.
+    func testSecondRestartIsOfferedRatherThanTaken() async {
         let (settings, defaults, suiteName) = makeSettings()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         settings.onboardingStep = .permission
+        settings.didAutoRelaunchForPermission = true
         let chat = FakeChatPresenter()
-        let flow = makeFlow(
-            chat: chat,
-            scheduler: Scheduler(clock: TestClock()),
-            settings: settings
-        )
-        flow.probePermission = { false }
-        flow.requestPermission = {
-            XCTAssertTrue(settings.screenPermissionRequestPending)
-            return true
-        }
+        var relaunchCount = 0
+        let flow = makeFlow(chat: chat, settings: settings, relaunch: { relaunchCount += 1 })
         flow.isPermissionGranted = { true }
+        flow.probePermission = { false }
+        flow.requestPermission = { true }
         flow.pollInterval = 0.001
 
         flow.start()
         chat.onTap?()
 
         await waitUntil { settings.onboardingStep == .relaunch }
-    }
+        XCTAssertEqual(relaunchCount, 0)
+        XCTAssertEqual(chat.affordance, .click)
+        XCTAssertTrue(chat.shownMessages.contains { $0.text.contains("Click here to restart") })
 
-    func testUnresolvedPermissionRequestKeepsRelaunchMarker() async {
-        let (settings, defaults, suiteName) = makeSettings()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        settings.onboardingStep = .permission
-        let chat = FakeChatPresenter()
-        let flow = makeFlow(
-            chat: chat,
-            scheduler: Scheduler(clock: TestClock()),
-            settings: settings
-        )
-        flow.probePermission = { false }
-        flow.requestPermission = { false }
-        flow.isPermissionGranted = { false }
-        flow.pollInterval = 0.001
-
-        flow.start()
         chat.onTap?()
-        try? await Task.sleep(nanoseconds: 20_000_000)
-
-        XCTAssertEqual(settings.onboardingStep, .permission)
-        XCTAssertTrue(settings.screenPermissionRequestPending)
-        XCTAssertNotNil(chat.onTap)
-
-        settings.onboardingStep = .welcome
-        flow.start()
+        XCTAssertEqual(relaunchCount, 1)
     }
 
     func testPendingPermissionRequestResumesAndAdvancesAfterSystemRelaunch() async {
@@ -202,60 +178,47 @@ final class OnboardingFlowTests: XCTestCase {
         settings.onboardingStep = .permission
         settings.screenPermissionRequestPending = true
         let chat = FakeChatPresenter()
-        let flow = makeFlow(
-            chat: chat,
-            scheduler: Scheduler(clock: TestClock()),
-            settings: settings
-        )
+        let flow = makeFlow(chat: chat, settings: settings)
         flow.probePermission = { true }
-        flow.isOllamaReady = { false }
+        flow.modelState = { .waitingForOllama }
         flow.pollInterval = 0.001
 
         flow.start()
 
         XCTAssertEqual(chat.lastShown?.text, "Checking Screen Recording permission…")
-        await waitUntil { settings.onboardingStep == .directCapturePermission }
+        await waitUntil { settings.onboardingStep == .test }
         XCTAssertFalse(settings.screenPermissionRequestPending)
     }
 
     func testPendingPermissionRequestWaitsForGrantToPropagateAfterRelaunch() async {
         let (settings, defaults, suiteName) = makeSettings()
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        settings.onboardingStep = .permission
+        settings.onboardingStep = .relaunch
         settings.screenPermissionRequestPending = true
         let chat = FakeChatPresenter()
-        let flow = makeFlow(
-            chat: chat,
-            scheduler: Scheduler(clock: TestClock()),
-            settings: settings
-        )
+        let flow = makeFlow(chat: chat, settings: settings)
         var probeCount = 0
         flow.probePermission = {
             probeCount += 1
             return probeCount == 3
         }
         flow.isPermissionGranted = { false }
-        flow.isOllamaReady = { false }
+        flow.modelState = { .waitingForOllama }
         flow.pollInterval = 0.001
 
         flow.start()
 
-        await waitUntil { settings.onboardingStep == .directCapturePermission }
+        await waitUntil { settings.onboardingStep == .test }
         XCTAssertEqual(probeCount, 3)
-        XCTAssertFalse(settings.screenPermissionRequestPending)
     }
 
-    func testPendingPermissionRequestReturnsToPermissionStepAfterDenial() async {
+    func testPendingPermissionRequestReturnsToTheAskAfterDenial() async {
         let (settings, defaults, suiteName) = makeSettings()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         settings.onboardingStep = .permission
         settings.screenPermissionRequestPending = true
         let chat = FakeChatPresenter()
-        let flow = makeFlow(
-            chat: chat,
-            scheduler: Scheduler(clock: TestClock()),
-            settings: settings
-        )
+        let flow = makeFlow(chat: chat, settings: settings)
         flow.probePermission = { false }
         flow.isPermissionGranted = { false }
         flow.permissionResumeAttempts = 2
@@ -265,164 +228,41 @@ final class OnboardingFlowTests: XCTestCase {
 
         await waitUntil { !settings.screenPermissionRequestPending }
         XCTAssertEqual(settings.onboardingStep, .permission)
-        XCTAssertTrue(chat.shownMessages.contains { $0.text.contains("Click this bubble") })
+        XCTAssertEqual(chat.lastShown?.text, OnboardingFlow.introText)
     }
 
-    func testRelaunchStepMovesOnOnceCaptureWorks() async {
+    // MARK: - Model download
+
+    func testDownloadProgressIsShownWhileTheModelArrives() async {
         let (settings, defaults, suiteName) = makeSettings()
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        settings.onboardingStep = .relaunch
+        settings.onboardingStep = .test
         let chat = FakeChatPresenter()
-        let flow = makeFlow(
-            chat: chat,
-            scheduler: Scheduler(clock: TestClock()),
-            settings: settings
-        )
-        flow.probePermission = { true }
-        flow.isOllamaReady = { false }
-        flow.pollInterval = 0.001
+        var state = ModelReadinessState.waitingForOllama
+        let flow = makeFlow(chat: chat, settings: settings)
+        flow.modelState = { state }
 
         flow.start()
+        XCTAssertTrue(chat.lastShown?.text.contains("Waiting for Ollama") ?? false)
 
-        await waitUntil { settings.onboardingStep == .directCapturePermission }
-    }
+        state = .downloading(fraction: 0.42, detail: "2.6 of 6.1 GB")
+        flow.modelStateDidChange(state)
 
-    func testDirectCapturePermissionExplainsAccessAndWaitsForTap() async {
-        let (settings, defaults, suiteName) = makeSettings()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        settings.onboardingStep = .directCapturePermission
-        let chat = FakeChatPresenter()
-        let flow = makeFlow(
-            chat: chat,
-            scheduler: Scheduler(clock: TestClock()),
-            settings: settings
+        XCTAssertEqual(
+            chat.lastShown?.text,
+            "Downloading my eyes — 42% (2.6 of 6.1 GB). This runs once."
         )
-        var requestCount = 0
-        flow.requestDirectCapturePermission = {
-            requestCount += 1
-            return true
-        }
-        flow.isOllamaReady = { false }
-        flow.pollInterval = 0.001
-
-        flow.start()
-
-        XCTAssertEqual(requestCount, 0)
-        XCTAssertEqual(chat.affordance, .click)
-        XCTAssertTrue(chat.lastShown?.text.contains("automatically") ?? false)
-        XCTAssertTrue(chat.lastShown?.text.contains("pick it every time") ?? false)
-        XCTAssertNotNil(chat.onTap)
-
-        chat.onTap?()
-
-        XCTAssertEqual(chat.affordance, .click)
-        await waitUntil { settings.onboardingStep == .test }
-        XCTAssertEqual(requestCount, 1)
-        XCTAssertFalse(settings.directCapturePermissionRequestPending)
+        XCTAssertEqual(chat.lastShown?.autoHide, false)
     }
 
-    func testDirectCapturePermissionPersistsResumePointBeforeSystemRequest() async {
-        let (settings, defaults, suiteName) = makeSettings()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        settings.onboardingStep = .directCapturePermission
-        let chat = FakeChatPresenter()
-        let flow = makeFlow(
-            chat: chat,
-            scheduler: Scheduler(clock: TestClock()),
-            settings: settings
-        )
-        flow.requestDirectCapturePermission = {
-            XCTAssertEqual(settings.onboardingStep, .directCapturePermission)
-            XCTAssertTrue(settings.directCapturePermissionRequestPending)
-            return true
-        }
-        flow.isOllamaReady = { false }
-
-        flow.start()
-        chat.onTap?()
-
-        await waitUntil { settings.onboardingStep == .test }
-    }
-
-    func testPendingDirectCapturePermissionResumesAfterRelaunch() async {
-        let (settings, defaults, suiteName) = makeSettings()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        settings.onboardingStep = .directCapturePermission
-        settings.directCapturePermissionRequestPending = true
-        let chat = FakeChatPresenter()
-        let flow = makeFlow(
-            chat: chat,
-            scheduler: Scheduler(clock: TestClock()),
-            settings: settings
-        )
-        var didRequest = false
-        flow.requestDirectCapturePermission = {
-            didRequest = true
-            return true
-        }
-        flow.isOllamaReady = { false }
-
-        flow.start()
-
-        XCTAssertEqual(chat.lastShown?.text, "Checking direct screen access…")
-        await waitUntil { settings.onboardingStep == .test }
-        XCTAssertTrue(didRequest)
-        XCTAssertFalse(settings.directCapturePermissionRequestPending)
-    }
-
-    func testDeniedPendingDirectCaptureRequestClearsStaleRelaunchMarker() async {
-        let (settings, defaults, suiteName) = makeSettings()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        settings.onboardingStep = .directCapturePermission
-        settings.directCapturePermissionRequestPending = true
-        let chat = FakeChatPresenter()
-        let flow = makeFlow(
-            chat: chat,
-            scheduler: Scheduler(clock: TestClock()),
-            settings: settings
-        )
-        flow.requestDirectCapturePermission = { false }
-
-        flow.start()
-
-        await waitUntil {
-            chat.lastShown?.text.contains("still isn't available") == true
-        }
-        XCTAssertFalse(settings.directCapturePermissionRequestPending)
-        XCTAssertNotNil(chat.onTap)
-    }
-
-    func testDeniedDirectCapturePermissionStaysOnRetryStep() async {
-        let (settings, defaults, suiteName) = makeSettings()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        settings.onboardingStep = .directCapturePermission
-        let chat = FakeChatPresenter()
-        let flow = makeFlow(
-            chat: chat,
-            scheduler: Scheduler(clock: TestClock()),
-            settings: settings
-        )
-        flow.requestDirectCapturePermission = { false }
-
-        flow.start()
-        chat.onTap?()
-
-        await waitUntil {
-            chat.lastShown?.text.contains("still isn't available") == true
-        }
-        XCTAssertEqual(settings.onboardingStep, .directCapturePermission)
-        XCTAssertTrue(settings.directCapturePermissionRequestPending)
-        XCTAssertEqual(chat.affordance, .click)
-        XCTAssertNotNil(chat.onTap)
-    }
-
-    func testYouTubeDetectionRunsOnboardingCheck() async {
+    func testCheckRunsOnItsOwnOnceTheModelIsReady() async {
         let (settings, defaults, suiteName) = makeSettings()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         settings.onboardingStep = .test
         let chat = FakeChatPresenter()
         let scheduler = Scheduler(clock: TestClock())
         var checkReasons: [CheckReason] = []
+        var state = ModelReadinessState.downloading(fraction: 0.9, detail: nil)
         let flow = makeFlow(
             chat: chat,
             scheduler: scheduler,
@@ -432,50 +272,93 @@ final class OnboardingFlowTests: XCTestCase {
                 return Decision(tool: .set_angry, snoozeMinutes: nil, message: "Close it!")
             }
         )
-        flow.isOllamaReady = { true }
-        flow.isYouTubeOpen = { true }
-        flow.pollInterval = 0.001
+        flow.modelState = { state }
 
         flow.start()
+        XCTAssertTrue(checkReasons.isEmpty)
+
+        state = .ready
+        flow.modelStateDidChange(state)
 
         await waitUntil { checkReasons.count == 1 }
-        guard let reason = checkReasons.first else {
-            return XCTFail("Expected an onboarding check")
-        }
-        guard case .onboarding = reason else {
+        guard case .onboarding = checkReasons[0] else {
             return XCTFail("Expected the onboarding check reason")
         }
         XCTAssertEqual(scheduler.state, .angry)
+        XCTAssertNil(chat.onTap)
+    }
+
+    // MARK: - Finishing
+
+    func testACaughtFirstCheckEndsWithTheDemonstration() async {
+        let (settings, defaults, suiteName) = makeSettings()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        settings.intervalMinutes = 12
+        settings.onboardingStep = .test
+        let chat = FakeChatPresenter()
+        let scheduler = Scheduler(clock: TestClock())
+        var didFinish = false
+        let flow = makeFlow(
+            chat: chat,
+            scheduler: scheduler,
+            settings: settings,
+            runCheck: { _ in
+                Decision(tool: .set_angry, snoozeMinutes: nil, message: "Close it!")
+            }
+        )
+        flow.modelState = { .ready }
+        flow.onFinished = { didFinish = true }
+
+        flow.start()
+        await waitUntil { scheduler.state == .angry }
 
         scheduler.apply(Decision(tool: .set_idle, snoozeMinutes: nil, message: "Good."))
         flow.schedulerDidChange(to: scheduler.state)
+
         XCTAssertEqual(settings.onboardingStep, .done)
+        XCTAssertTrue(didFinish)
+        XCTAssertEqual(
+            chat.lastShown?.text,
+            "That's how it works. Back to work — next check in 12 minutes."
+        )
+        XCTAssertEqual(chat.lastShown?.autoHide, true)
+        XCTAssertEqual(chat.affordance, .reply)
+        XCTAssertNil(chat.onTap)
+        XCTAssertNil(chat.onClose)
     }
 
-    func testYouTubePromptIsDisplayOnly() async {
+    /// A clean first check gets the demo as an invitation, never as a gate.
+    func testACleanFirstCheckEndsWithAnInvitation() async {
         let (settings, defaults, suiteName) = makeSettings()
         defer { defaults.removePersistentDomain(forName: suiteName) }
+        settings.intervalMinutes = 10
         settings.onboardingStep = .test
         let chat = FakeChatPresenter()
+        let scheduler = Scheduler(clock: TestClock())
+        var didFinish = false
         let flow = makeFlow(
             chat: chat,
-            scheduler: Scheduler(clock: TestClock()),
-            settings: settings
+            scheduler: scheduler,
+            settings: settings,
+            runCheck: { _ in Decision(tool: .set_idle, snoozeMinutes: nil, message: "") }
         )
-        flow.isOllamaReady = { true }
-        flow.isYouTubeOpen = { false }
-        flow.pollInterval = 0.001
+        flow.modelState = { .ready }
+        flow.onFinished = { didFinish = true }
 
         flow.start()
-        await waitUntil { chat.lastShown?.text.contains("YouTube") == true }
+        await waitUntil { scheduler.state == .idle }
+        flow.schedulerDidChange(to: .idle)
 
-        XCTAssertEqual(chat.affordance, .display)
-        XCTAssertNil(chat.onReply)
-        XCTAssertNil(chat.onTap)
-        XCTAssertNotNil(chat.onClose)
+        XCTAssertEqual(settings.onboardingStep, .done)
+        XCTAssertTrue(didFinish)
+        XCTAssertEqual(
+            chat.lastShown?.text,
+            "Nothing to shout about. Next check in 10 minutes — open YouTube if you want "
+                + "to meet the other side of me."
+        )
     }
 
-    func testYouTubePromptCloseSkipsInsteadOfQuitting() async {
+    func testCloseDuringTheFirstCheckSkipsInsteadOfQuitting() async {
         let (settings, defaults, suiteName) = makeSettings()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         settings.onboardingStep = .test
@@ -484,77 +367,35 @@ final class OnboardingFlowTests: XCTestCase {
         var skipCount = 0
         let flow = makeFlow(
             chat: chat,
-            scheduler: Scheduler(clock: TestClock()),
             settings: settings,
             quit: { quitCount += 1 },
             skip: { skipCount += 1 }
         )
-        flow.isOllamaReady = { true }
-        flow.isYouTubeOpen = { false }
-        flow.pollInterval = 0.001
+        flow.modelState = { .waitingForOllama }
 
         flow.start()
-        await waitUntil { chat.lastShown?.text.contains("YouTube") == true }
         chat.onClose?()
 
         XCTAssertEqual(skipCount, 1)
         XCTAssertEqual(quitCount, 0)
     }
 
-    func testIdleAfterTestMarksOnboardingDone() async {
-        let (settings, defaults, suiteName) = makeSettings()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        settings.intervalMinutes = 12
-        settings.onboardingStep = .test
-        let chat = FakeChatPresenter()
-        let scheduler = Scheduler(clock: TestClock())
-        var didFinish = false
-        var didRunCheck = false
-        let flow = makeFlow(
-            chat: chat,
-            scheduler: scheduler,
-            settings: settings,
-            runCheck: { _ in
-                didRunCheck = true
-                return Decision(tool: .set_idle, snoozeMinutes: nil, message: "")
-            }
-        )
-        flow.isOllamaReady = { true }
-        flow.isYouTubeOpen = { true }
-        flow.pollInterval = 0.001
-        flow.onFinished = { didFinish = true }
-
-        flow.start()
-        await waitUntil { didRunCheck }
-        flow.schedulerDidChange(to: .idle)
-
-        XCTAssertEqual(settings.onboardingStep, .done)
-        XCTAssertTrue(didFinish)
-        XCTAssertEqual(chat.lastShown?.autoHide, true)
-        XCTAssertEqual(
-            chat.lastShown?.text,
-            "That's how it works. Back to work — next check in 12 minutes."
-        )
-        XCTAssertNil(chat.onReply)
-        XCTAssertNil(chat.onTap)
-        XCTAssertNil(chat.onClose)
-        XCTAssertEqual(chat.affordance, .reply)
-    }
+    // MARK: - Helpers
 
     private func makeFlow(
         chat: FakeChatPresenter,
-        scheduler: Scheduler,
+        scheduler: Scheduler? = nil,
         settings: Settings,
+        relaunch: @escaping () -> Void = {},
         quit: @escaping () -> Void = {},
         skip: @escaping () -> Void = {},
         runCheck: @escaping (CheckReason) async -> Decision? = { _ in nil }
     ) -> OnboardingFlow {
         OnboardingFlow(
             chat: chat,
-            scheduler: scheduler,
+            scheduler: scheduler ?? Scheduler(clock: TestClock()),
             settings: settings,
-            ollama: OllamaClient(model: settings.model),
-            relaunch: {},
+            relaunch: relaunch,
             quit: quit,
             skip: skip,
             runCheck: runCheck
@@ -588,11 +429,15 @@ private final class FakeChatPresenter: ChatPresenter {
     }
 
     var onReply: ((String) -> Void)?
-    var onTap: (() -> Void)?
+    /// Records every assignment so tests can count how many taps the flow ever asks for.
+    var onTap: (() -> Void)? {
+        didSet { tapHandlerAssignments.append(onTap != nil) }
+    }
     var onClose: (() -> Void)?
     var affordance: BubbleAffordance = .reply
     private(set) var shownMessages: [ShownMessage] = []
     private(set) var askedMessages: [String] = []
+    private(set) var tapHandlerAssignments: [Bool] = []
     private(set) var hideCount = 0
 
     var lastShown: ShownMessage? { shownMessages.last }

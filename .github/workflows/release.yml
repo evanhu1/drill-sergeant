@@ -1,0 +1,64 @@
+name: Release
+
+# Builds the app that install.sh downloads. Every push to main refreshes the `latest`
+# release, so `curl … | bash` never has to compile anything on the user's Mac.
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+    # Every build changes the ad-hoc signature, which costs each updater a fresh Screen
+    # Recording grant. Prose changes are not worth that.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Test
+        run: swift test
+
+      - name: Bundle
+        run: Scripts/bundle.sh
+
+      - name: Zip
+        run: ditto -c -k --keepParent "build/Drill Sergeant.app" DrillSergeant.zip
+
+      - name: Read version
+        id: version
+        run: |
+          version="$(defaults read "$PWD/build/Drill Sergeant.app/Contents/Info" \
+            CFBundleShortVersionString)"
+          printf 'version=%s\n' "${version}" >>"${GITHUB_OUTPUT}"
+
+      # A rolling `latest` release keeps install.sh's download URL stable. Upload over the
+      # existing asset instead of recreating the release, so the URL never 404s mid-deploy.
+      - name: Publish latest
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          notes="Build ${VERSION} of ${GITHUB_SHA}."
+          if gh release view latest >/dev/null 2>&1; then
+            gh release upload latest DrillSergeant.zip --clobber
+            gh release edit latest --title "Drill Sergeant ${VERSION}" --notes "${notes}"
+          else
+            gh release create latest DrillSergeant.zip \
+              --title "Drill Sergeant ${VERSION}" --notes "${notes}" --latest
+          fi
+
+      - name: Publish tag
+        if: ${{ startsWith(github.ref, 'refs/tags/') }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" DrillSergeant.zip --generate-notes
+          gh release upload latest DrillSergeant.zip --clobber

@@ -1,6 +1,7 @@
 import Foundation
 
 enum OnboardingStep: String, Codable {
+    /// Kept so installs from older builds still resume. It now runs the permission step.
     case welcome
     case permission
     case relaunch
@@ -26,12 +27,15 @@ final class OnboardingFlow {
             return false
         }
     }
-    var isYouTubeOpen: () -> Bool = {
-        ActiveWindowInspector.current().looksLikeYouTube
-    }
-    var isOllamaReady: () async -> Bool
+    /// Current model state, supplied by the coordinator's shared `ModelReadiness`.
+    var modelState: () -> ModelReadinessState = { .ready }
     var pollInterval: TimeInterval = 2
     var permissionResumeAttempts = 5
+
+    static let introText =
+        "Drill Sergeant reporting. I watch your screen and shout when you slack off — "
+            + "all on a local AI, so nothing leaves your Mac. "
+            + "Click here to let me see your screen."
 
     private let chat: ChatPresenter
     private let scheduler: Scheduler
@@ -52,7 +56,6 @@ final class OnboardingFlow {
         chat: ChatPresenter,
         scheduler: Scheduler,
         settings: Settings,
-        ollama: OllamaClient,
         relaunch: @escaping () -> Void,
         quit: @escaping () -> Void,
         skip: @escaping () -> Void,
@@ -65,10 +68,6 @@ final class OnboardingFlow {
         quitHandler = quit
         skipHandler = skip
         self.runCheck = runCheck
-        isOllamaReady = {
-            guard await ollama.isReachable() else { return false }
-            return (try? await ollama.hasModel()) == true
-        }
     }
 
     /// Resumes onboarding from the last persisted step.
@@ -78,9 +77,7 @@ final class OnboardingFlow {
         chat.onClose = settings.onboardingStep == .done ? nil : quitHandler
 
         switch settings.onboardingStep {
-        case .welcome:
-            presentWelcome()
-        case .permission:
+        case .welcome, .permission:
             if settings.screenPermissionRequestPending {
                 resumePermissionRequest()
             } else {
@@ -89,11 +86,7 @@ final class OnboardingFlow {
         case .relaunch:
             resumePermissionRequest()
         case .directCapturePermission:
-            if settings.directCapturePermissionRequestPending {
-                resumeDirectCapturePermissionRequest()
-            } else {
-                presentDirectCapturePermissionStep()
-            }
+            beginDirectCapturePermissionRequest()
         case .test:
             beginTestStep()
         case .done:
@@ -108,33 +101,27 @@ final class OnboardingFlow {
         finish()
     }
 
-    private func presentWelcome() {
-        chat.affordance = .click
-        chat.show(
-            "Drill Sergeant reporting. I watch your screen and shout at you when you slack "
-                + "off. Everything runs on a local AI model, and your data never leaves your Mac.",
-            autoHide: false
-        )
-        chat.onTap = { [weak self] in
-            guard let self else { return }
-            clearChatHandlers()
-            settings.onboardingStep = .permission
-            beginPermissionStep()
+    /// Receives model download progress so the bubble can show it live.
+    func modelStateDidChange(_ state: ModelReadinessState) {
+        guard settings.onboardingStep == .test, !hasTriggeredTestCheck else { return }
+        if state.isReady {
+            modelDidBecomeReady()
+        } else {
+            chat.show(waitingMessage(for: state), autoHide: false)
         }
     }
 
-    /// The step is always shown. Skipping it on `isPermissionGranted()` meant it silently
-    /// vanished whenever the grant was inherited rather than this build's own.
+    // MARK: - Screen Recording
+
+    /// The intro and the permission ask are one bubble and one click. The step is always
+    /// shown; skipping it on `isPermissionGranted()` meant it silently vanished whenever
+    /// the grant was inherited rather than this build's own.
     private func beginPermissionStep() {
         clearChatHandlers()
         chat.affordance = .click
         settings.onboardingStep = .permission
         permissionRequestAttempts = 0
-        chat.show(
-            "Now I need Screen Recording permission to see your screen. "
-                + "Click this bubble to grant it.",
-            autoHide: false
-        )
+        chat.show(Self.introText, autoHide: false)
         chat.onTap = { [weak self] in
             self?.requestScreenPermission()
         }
@@ -189,7 +176,7 @@ final class OnboardingFlow {
         pollingTask?.cancel()
         pollingTask = nil
         settings.screenPermissionRequestPending = false
-        presentDirectCapturePermissionStep()
+        beginDirectCapturePermissionRequest()
     }
 
     private func permissionNeedsRelaunch() {
@@ -240,8 +227,18 @@ final class OnboardingFlow {
         beginPermissionStep()
     }
 
+    /// The restart is bookkeeping, not a decision, so it happens on its own. It is done once
+    /// per install: if the grant still has not propagated afterwards, asking again would only
+    /// loop, so the bubble hands the restart back to the user.
     private func presentRelaunchStep() {
         clearChatHandlers()
+        guard settings.didAutoRelaunchForPermission else {
+            settings.didAutoRelaunchForPermission = true
+            chat.show("Permission granted. Restarting myself…", autoHide: false)
+            relaunchHandler()
+            return
+        }
+
         chat.affordance = .click
         chat.show(
             "Permission granted. I have to restart to use it. Click here to restart.",
@@ -252,50 +249,26 @@ final class OnboardingFlow {
         }
     }
 
-    /// macOS separately asks whether the app may capture without presenting its window picker.
-    /// Trigger that prompt only after an explicit tap, then discard the probe screenshot.
-    private func presentDirectCapturePermissionStep() {
-        clearChatHandlers()
-        chat.affordance = .click
-        settings.onboardingStep = .directCapturePermission
-        settings.directCapturePermissionRequestPending = false
-        chat.show(
-            "One more permission: I need direct screen access so I can check your active window "
-                + "automatically without making you pick it every time. Click this bubble to grant it.",
-            autoHide: false
-        )
-        chat.onTap = { [weak self] in
-            self?.beginDirectCapturePermissionRequest()
-        }
-    }
+    // MARK: - Direct capture
 
+    /// macOS asks separately whether the app may capture without presenting its window
+    /// picker. It follows the first grant with no bubble in between: the user has just
+    /// answered one screen prompt and the second belongs to the same request.
     private func beginDirectCapturePermissionRequest() {
-        settings.directCapturePermissionRequestPending = true
-        runDirectCapturePermissionRequest(clearPendingOnFailure: false)
-    }
-
-    private func resumeDirectCapturePermissionRequest() {
         clearChatHandlers()
+        settings.onboardingStep = .directCapturePermission
+        settings.directCapturePermissionRequestPending = true
         chat.show("Checking direct screen access…", autoHide: false)
-        runDirectCapturePermissionRequest(clearPendingOnFailure: true)
-    }
-
-    private func runDirectCapturePermissionRequest(clearPendingOnFailure: Bool) {
-        chat.onReply = nil
-        chat.onTap = nil
         checkTask?.cancel()
         checkTask = Task { [weak self] in
             guard let self else { return }
             let granted = await requestDirectCapturePermission()
             guard !Task.isCancelled else { return }
+            settings.directCapturePermissionRequestPending = false
             if granted {
-                settings.directCapturePermissionRequestPending = false
                 Log.info("Direct screen capture permission works")
                 beginTestStep()
             } else {
-                if clearPendingOnFailure {
-                    settings.directCapturePermissionRequestPending = false
-                }
                 presentDirectCapturePermissionRetry()
             }
         }
@@ -314,6 +287,11 @@ final class OnboardingFlow {
         }
     }
 
+    // MARK: - First check
+
+    /// The last step runs a real check on whatever is already on screen. Nothing is asked
+    /// of the user: by now the model has usually finished downloading in the background,
+    /// and the first shout is the demonstration.
     private func beginTestStep() {
         clearChatHandlers()
         settings.onboardingStep = .test
@@ -321,79 +299,49 @@ final class OnboardingFlow {
         settings.directCapturePermissionRequestPending = false
         hasTriggeredTestCheck = false
         isRunningTestCheck = false
-        chat.show("Getting the screen test ready…", autoHide: false)
-        startOllamaPolling()
-    }
-
-    private func startOllamaPolling() {
-        pollingTask?.cancel()
-        let checkOllama = isOllamaReady
-        let interval = pollInterval * 5
-        let model = settings.model
-        pollingTask = Task { [weak self] in
-            var displayedError = false
-            while !Task.isCancelled {
-                if await checkOllama() {
-                    self?.ollamaDidBecomeReady()
-                    return
-                }
-
-                if !displayedError {
-                    self?.chat.show(
-                        "I can't reach Ollama or the model \(model) is missing. Run install.sh "
-                            + "again, or `ollama pull \(model)`. I'll keep checking.",
-                        autoHide: false
-                    )
-                    displayedError = true
-                }
-                guard await Self.sleep(for: interval) else { return }
-            }
-        }
-    }
-
-    private func ollamaDidBecomeReady() {
-        guard settings.onboardingStep == .test else { return }
-        pollingTask = nil
-        chat.onTap = nil
-        chat.onReply = nil
         chat.onClose = skipHandler
-        chat.affordance = .display
-        chat.show("Let's test it, open up YouTube.", autoHide: false)
-        scheduler.enterWatching()
-        startYouTubePolling()
+
+        let state = modelState()
+        if state.isReady {
+            modelDidBecomeReady()
+        } else {
+            chat.show(waitingMessage(for: state), autoHide: false)
+        }
     }
 
-    private func startYouTubePolling() {
-        pollingTask?.cancel()
-        let checkYouTube = isYouTubeOpen
-        let interval = pollInterval
-        let reminderAfter = pollInterval * 90
-        pollingTask = Task { [weak self] in
-            var elapsed: TimeInterval = 0
-            var displayedReminder = false
-
-            while !Task.isCancelled {
-                if checkYouTube() {
-                    self?.beginTestCheck()
-                    return
-                }
-                if !displayedReminder, elapsed >= reminderAfter {
-                    self?.chat.show(
-                        "Still waiting. Open YouTube so I can show you what happens.",
-                        autoHide: false
-                    )
-                    displayedReminder = true
-                }
-                guard await Self.sleep(for: interval) else { return }
-                elapsed += max(0, interval)
+    private func waitingMessage(for state: ModelReadinessState) -> String {
+        switch state {
+        case .ready:
+            return "Ready."
+        case .waitingForOllama:
+            return "Waiting for Ollama to start. Open it if it isn't running — I'll wait."
+        case let .retrying(reason):
+            return "My download stumbled (\(reason)). Trying again."
+        case let .downloading(fraction, detail):
+            guard let fraction else {
+                return "Downloading my eyes — a 6 GB vision model. This runs once."
             }
+            let percent = Int((fraction * 100).rounded())
+            guard let detail else {
+                return "Downloading my eyes — \(percent)%. This runs once."
+            }
+            return "Downloading my eyes — \(percent)% (\(detail)). This runs once."
         }
+    }
+
+    private func modelDidBecomeReady() {
+        guard settings.onboardingStep == .test, !hasTriggeredTestCheck else { return }
+        pollingTask?.cancel()
+        pollingTask = nil
+        chat.affordance = .display
+        chat.show("Let's see what you're up to.", autoHide: false)
+        scheduler.enterWatching()
+        beginTestCheck()
     }
 
     private func beginTestCheck() {
         guard settings.onboardingStep == .test, !isRunningTestCheck else { return }
-        pollingTask?.cancel()
-        pollingTask = nil
+        chat.onTap = nil
         chat.onReply = nil
         hasTriggeredTestCheck = true
         isRunningTestCheck = true
@@ -406,24 +354,31 @@ final class OnboardingFlow {
             isRunningTestCheck = false
 
             guard let decision else {
+                // The check could not run. Fall back to waiting for the model.
                 hasTriggeredTestCheck = false
-                ollamaDidBecomeReady()
+                chat.show(waitingMessage(for: modelState()), autoHide: false)
                 return
             }
             scheduler.apply(decision)
         }
     }
 
+    /// Ends onboarding. A clean first check gets the YouTube demo as an invitation rather
+    /// than a gate — nothing here waits on the user any more.
     private func finish() {
         guard settings.onboardingStep != .done else { return }
+        let wasCaught = scheduler.previousState == .angry
         cancelTasks()
         clearChatHandlers()
         settings.onboardingStep = .done
         chat.onClose = nil
         chat.affordance = .reply
         chat.show(
-            "That's how it works. Back to work — next check in "
-                + "\(settings.intervalMinutes) minutes.",
+            wasCaught
+                ? "That's how it works. Back to work — next check in "
+                    + "\(settings.intervalMinutes) minutes."
+                : "Nothing to shout about. Next check in \(settings.intervalMinutes) minutes — "
+                    + "open YouTube if you want to meet the other side of me.",
             autoHide: true
         )
         notifyFinished()
