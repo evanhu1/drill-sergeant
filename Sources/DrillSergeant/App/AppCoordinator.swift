@@ -56,7 +56,6 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         self.cursorTracker = cursorTracker
 
         scheduler.delegate = self
-        notchWindow.onSetGoal = { [weak self] in self?.promptForGoal() }
         notchWindow.onCheckNow = { [weak self] in self?.checkNow() }
         notchWindow.onDeveloper = { [weak self] in self?.showDeveloperToolbar() }
         notchWindow.onQuit = { [weak self] in self?.quit() }
@@ -116,20 +115,6 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         scheduler?.checkNow()
     }
 
-    func promptForGoal() {
-        guard let chat else { return }
-        chat.onTap = nil
-        chat.onReply = { [weak self] goal in
-            guard let self else { return }
-            settings.goal = goal
-            conversation?.reset()
-            Log.info("Goal updated; conversation reset")
-            installReplyHandler()
-            chat.hide()
-        }
-        chat.ask("What are you working on?")
-    }
-
     func quit() {
         Log.info("Quit requested")
         NSApp.terminate(nil)
@@ -137,14 +122,14 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
 
     var statusText: String {
         guard let scheduler else {
-            return "state=starting · next check — · goal=\(shortGoal) · model=\(settings.model)"
+            return "state=starting · next check — · model=\(settings.model)"
         }
         let age = max(0, Int(Date().timeIntervalSince(scheduler.stateChangedAt)))
         let nextCheck = scheduler.nextCheckAt.map {
             DateFormatter.localizedString(from: $0, dateStyle: .none, timeStyle: .short)
         } ?? "—"
         return "state=\(scheduler.state.rawValue) (\(age)s) · next check \(nextCheck) "
-            + "· goal=\(shortGoal) · model=\(settings.model)"
+            + "· model=\(settings.model)"
     }
 
     var lastDecisionText: String {
@@ -205,7 +190,6 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
 
     func resetOnboarding() {
         settings.onboardingStep = .welcome
-        settings.goal = ""
         conversation?.reset()
         scheduler?.stop()
 
@@ -501,7 +485,6 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
     ) -> CheckContext {
         let now = Date()
         return CheckContext(
-            goal: settings.goal,
             state: scheduler.state,
             previousState: scheduler.previousState,
             stateAge: max(0, now.timeIntervalSince(scheduler.stateChangedAt)),
@@ -519,7 +502,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
     private func systemMessage() -> OllamaMessage {
         OllamaMessage(
             role: "system",
-            content: PromptBuilder.systemPrompt(goal: settings.goal),
+            content: PromptBuilder.systemPrompt(),
             images: nil
         )
     }
@@ -545,12 +528,6 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
 
     private var idleDecision: Decision {
         Decision(tool: .set_idle, snoozeMinutes: nil, message: "")
-    }
-
-    private var shortGoal: String {
-        let goal = settings.goal.isEmpty ? "(none)" : settings.goal
-        guard goal.count > 32 else { return goal }
-        return String(goal.prefix(31)) + "…"
     }
 
     private func showDeveloperToolbar() {

@@ -2,7 +2,6 @@ import Foundation
 
 enum OnboardingStep: String, Codable {
     case welcome
-    case goal
     case permission
     case relaunch
     case test
@@ -61,10 +60,7 @@ final class OnboardingFlow {
 
         switch settings.onboardingStep {
         case .welcome:
-            settings.onboardingStep = .goal
-            presentGoalQuestion()
-        case .goal:
-            presentGoalQuestion()
+            presentWelcome()
         case .permission:
             beginPermissionStep()
         case .relaunch:
@@ -87,18 +83,18 @@ final class OnboardingFlow {
         finish()
     }
 
-    private func presentGoalQuestion() {
-        chat.onTap = nil
-        chat.onReply = { [weak self] goal in
+    private func presentWelcome() {
+        chat.show(
+            "Drill Sergeant reporting. I watch your screen and shout at you when you slack "
+                + "off. Everything runs on a local AI model, and your data never leaves your Mac.",
+            autoHide: false
+        )
+        chat.onTap = { [weak self] in
             guard let self else { return }
-            settings.goal = goal
+            clearChatHandlers()
             settings.onboardingStep = .permission
             beginPermissionStep()
         }
-        chat.ask(
-            "Drill Sergeant reporting. I watch your screen and shout at you when you slack "
-                + "off. Everything runs on a local AI model, and your data never leaves your Mac."
-        )
     }
 
     private func beginPermissionStep() {
@@ -270,7 +266,7 @@ final class OnboardingFlow {
         clearChatHandlers()
         settings.onboardingStep = .done
         chat.show(
-            "That's how it works. Now back to: \(settings.goal). Next check in "
+            "That's how it works. Back to work — next check in "
                 + "\(settings.intervalMinutes) minutes.",
             autoHide: true
         )

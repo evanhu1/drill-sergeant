@@ -403,8 +403,7 @@ Design: two white eyes on black, each ~14×18pt, 12pt apart, in the hanging part
 - **watching**: eyes narrow slightly (height ×0.85) and translate toward `gaze` by up to 4pt.
   A pupil is not required; move the whole eye. Optional: a small darker inner dot.
 - **angry**: eyes tilt inward: add a black diagonal "brow" mask over the inner-top corner
-  (rotate a black rectangle 20°). Eyes tinted `#FF5A5A`. Still follows gaze. Subtle 2px shake
-  every ~2s.
+  (rotate a black rectangle 20°). Eyes tinted `#FF5A5A`. Still follows gaze.
 - **happy**: eyes become upward arcs (like `^ ^`): draw an arc stroke 3pt white, no fill. Slight
   bounce on entry.
 - All transitions animated with `.easeInOut(duration: 0.25)`; use `withAnimation` in the model
@@ -760,7 +759,7 @@ States:
 - **angry**: the top of each sclera is cut by a slanted lid: clip the sclera (and pupil) with a
   shape whose top edge runs from the **outer** top corner at 22% of the eye height down to the
   **inner** corner at 52% of the eye height (lids slant down toward the nose). Pupil scales to 0.9.
-  No red tint, no brow. Subtle 1.5pt horizontal shake every ~2.5s remains.
+  No red tint, no brow, and no shake: the angry eyes hold still and stare.
 - **happy**: sclera collapses into an upward arc: render a 3.5pt-thick cream arc (the top half of
   the sclera outline, ends slightly flared), no pupil. Bounce on entry (scale 1.15 → 1.0, 0.3s).
 - Tray hidden: nothing visible (unchanged).

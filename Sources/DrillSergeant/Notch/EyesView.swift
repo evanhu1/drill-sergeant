@@ -14,7 +14,6 @@ struct EyesView: View {
     var gaze: CGPoint? = nil
     var animationsEnabled = true
 
-    @State private var shakeOffset: CGFloat = 0
     @State private var happyScale: CGFloat = 1
 
     private let scleraSize = CGSize(width: 22, height: 27)
@@ -26,7 +25,6 @@ struct EyesView: View {
             eye(.left)
             eye(.right)
         }
-        .offset(x: shakeOffset)
         .padding(.bottom, 4)
         .animation(transitionAnimation, value: model.state)
         .animation(.easeOut(duration: 0.12), value: effectiveGaze)
@@ -170,38 +168,14 @@ struct EyesView: View {
     }
 
     private func runStateAccent() async {
-        shakeOffset = 0
         happyScale = 1
 
         switch model.state {
-        case .angry:
-            await runAngryShakeLoop()
         case .happy:
             await runHappyBounce()
-        case .idle, .watching:
+        case .idle, .watching, .angry:
             return
         }
-    }
-
-    private func runAngryShakeLoop() async {
-        while !Task.isCancelled, model.state == .angry {
-            do {
-                try await sleep(seconds: Double.random(in: 2.3 ... 2.7))
-                try await shake(to: -1.5)
-                try await shake(to: 1.5)
-                try await shake(to: 0)
-            } catch {
-                shakeOffset = 0
-                return
-            }
-        }
-    }
-
-    private func shake(to offset: CGFloat) async throws {
-        withAnimation(.easeInOut(duration: 0.055)) {
-            shakeOffset = offset
-        }
-        try await sleep(seconds: 0.055)
     }
 
     private func runHappyBounce() async {

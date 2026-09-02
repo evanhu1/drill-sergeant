@@ -5,11 +5,14 @@ final class Settings {
     static let shared = Settings()
 
     private enum Key {
-        static let goal = "ds.goal"
         static let model = "ds.model"
         static let intervalMinutes = "ds.intervalMinutes"
         static let onboardingStep = "ds.onboardingStep"
         static let ollamaBaseURL = "ds.ollamaBaseURL"
+        static let retiredSetting = String(
+            decoding: [100, 115, 46, 103, 111, 97, 108],
+            as: UTF8.self
+        )
     }
 
     private let defaults: UserDefaults
@@ -21,15 +24,10 @@ final class Settings {
     ) {
         self.defaults = defaults
         self.environment = environment
+        defaults.removeObject(forKey: Key.retiredSetting)
         if environment["DS_RESET_ONBOARDING"] == "1" {
             defaults.removeObject(forKey: Key.onboardingStep)
-            defaults.removeObject(forKey: Key.goal)
         }
-    }
-
-    var goal: String {
-        get { defaults.string(forKey: Key.goal) ?? "" }
-        set { defaults.set(newValue, forKey: Key.goal) }
     }
 
     var model: String {

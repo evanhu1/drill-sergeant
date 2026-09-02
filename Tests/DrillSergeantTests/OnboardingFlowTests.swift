@@ -3,31 +3,49 @@ import XCTest
 
 @MainActor
 final class OnboardingFlowTests: XCTestCase {
-    func testWelcomeAsksForGoalAndSavesReply() async {
+    func testWelcomeShowsPersistentMessageAndTapAdvances() async {
         let (settings, defaults, suiteName) = makeSettings()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let chat = FakeChatPresenter()
         let scheduler = Scheduler(clock: TestClock())
-        var permissionGranted = false
         let flow = makeFlow(chat: chat, scheduler: scheduler, settings: settings)
-        flow.isPermissionGranted = { permissionGranted }
+        flow.isPermissionGranted = { false }
         flow.pollInterval = 0.001
 
         flow.start()
 
-        XCTAssertEqual(settings.onboardingStep, .goal)
-        XCTAssertEqual(chat.askedMessages.count, 1)
-        XCTAssertTrue(chat.askedMessages[0].contains("Drill Sergeant reporting"))
-        XCTAssertTrue(chat.askedMessages[0].contains("never leaves your Mac"))
+        XCTAssertEqual(settings.onboardingStep, .welcome)
+        XCTAssertEqual(
+            chat.lastShown?.text,
+            "Drill Sergeant reporting. I watch your screen and shout at you when you slack "
+                + "off. Everything runs on a local AI model, and your data never leaves your Mac."
+        )
+        XCTAssertEqual(chat.lastShown?.autoHide, false)
+        XCTAssertTrue(chat.askedMessages.isEmpty)
+        XCTAssertNil(chat.onReply)
+        XCTAssertNotNil(chat.onTap)
+        XCTAssertTrue(defaults.persistentDomain(forName: suiteName)?.isEmpty ?? true)
 
-        chat.onReply?("Finish the launch")
+        chat.onTap?()
 
-        XCTAssertEqual(settings.goal, "Finish the launch")
         XCTAssertEqual(settings.onboardingStep, .permission)
         XCTAssertTrue(chat.shownMessages.contains { $0.text.contains("Screen Recording") })
+        XCTAssertEqual(
+            defaults.persistentDomain(forName: suiteName) as? [String: String],
+            ["ds.onboardingStep": OnboardingStep.permission.rawValue]
+        )
 
-        permissionGranted = true
-        await waitUntil { settings.onboardingStep == .relaunch }
+        let resumedChat = FakeChatPresenter()
+        let resumedFlow = makeFlow(
+            chat: resumedChat,
+            scheduler: Scheduler(clock: TestClock()),
+            settings: settings
+        )
+        resumedFlow.isPermissionGranted = { false }
+        resumedFlow.start()
+
+        XCTAssertTrue(resumedChat.shownMessages.contains { $0.text.contains("Screen Recording") })
+        XCTAssertFalse(resumedChat.shownMessages.contains { $0.text.contains("Drill Sergeant reporting") })
     }
 
     func testPermissionStepSkipsWhenAlreadyGranted() async {
@@ -98,7 +116,6 @@ final class OnboardingFlowTests: XCTestCase {
     func testIdleAfterTestMarksOnboardingDone() async {
         let (settings, defaults, suiteName) = makeSettings()
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        settings.goal = "Write the README"
         settings.intervalMinutes = 12
         settings.onboardingStep = .test
         let chat = FakeChatPresenter()
@@ -128,7 +145,7 @@ final class OnboardingFlowTests: XCTestCase {
         XCTAssertEqual(chat.lastShown?.autoHide, true)
         XCTAssertEqual(
             chat.lastShown?.text,
-            "That's how it works. Now back to: Write the README. Next check in 12 minutes."
+            "That's how it works. Back to work — next check in 12 minutes."
         )
         XCTAssertNil(chat.onReply)
         XCTAssertNil(chat.onTap)

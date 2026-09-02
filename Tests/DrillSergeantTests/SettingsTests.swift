@@ -8,20 +8,17 @@ final class SettingsTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let settings = Settings(defaults: defaults, environment: [:])
 
-        XCTAssertEqual(settings.goal, "")
         XCTAssertEqual(settings.model, "qwen3-vl:8b")
         XCTAssertEqual(settings.intervalMinutes, 10)
         XCTAssertEqual(settings.onboardingStep, .welcome)
         XCTAssertEqual(settings.ollamaBaseURL.absoluteString, "http://127.0.0.1:11434")
 
-        settings.goal = "Write tests"
         settings.model = "custom:8b"
         settings.intervalMinutes = 15
         settings.onboardingStep = .test
         settings.ollamaBaseURL = URL(string: "http://localhost:9999")!
 
         let reloaded = Settings(defaults: defaults, environment: [:])
-        XCTAssertEqual(reloaded.goal, "Write tests")
         XCTAssertEqual(reloaded.model, "custom:8b")
         XCTAssertEqual(reloaded.intervalMinutes, 15)
         XCTAssertEqual(reloaded.onboardingStep, .test)
@@ -45,10 +42,23 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(settings.ollamaBaseURL.absoluteString, "http://localhost:2222")
     }
 
-    func testResetEnvironmentClearsGoalAndOnboarding() {
+    func testInitializationRemovesRetiredSetting() {
         let (defaults, suiteName) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
-        defaults.set("Old goal", forKey: "ds.goal")
+        let retiredKey = String(
+            decoding: [100, 115, 46, 103, 111, 97, 108],
+            as: UTF8.self
+        )
+        defaults.set("Retired value", forKey: retiredKey)
+
+        _ = Settings(defaults: defaults, environment: [:])
+
+        XCTAssertNil(defaults.object(forKey: retiredKey))
+    }
+
+    func testResetEnvironmentClearsOnboarding() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
         defaults.set(OnboardingStep.done.rawValue, forKey: "ds.onboardingStep")
 
         let settings = Settings(
@@ -56,7 +66,6 @@ final class SettingsTests: XCTestCase {
             environment: ["DS_RESET_ONBOARDING": "1"]
         )
 
-        XCTAssertEqual(settings.goal, "")
         XCTAssertEqual(settings.onboardingStep, .welcome)
     }
 

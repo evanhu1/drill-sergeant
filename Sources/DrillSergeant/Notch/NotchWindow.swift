@@ -6,7 +6,6 @@ import SwiftUI
 final class NotchWindow: NSPanel {
     private static let panelHeight: CGFloat = 40
 
-    var onSetGoal: (() -> Void)?
     var onCheckNow: (() -> Void)?
     var onDeveloper: (() -> Void)?
     var onQuit: (() -> Void)?
@@ -159,9 +158,6 @@ final class NotchWindow: NSPanel {
         let menu = NSMenu()
         menu.autoenablesItems = false
         menu.addItem(
-            menuItem(title: "Set goal…", action: #selector(setGoal(_:)))
-        )
-        menu.addItem(
             menuItem(title: "Check now", action: #selector(checkNow(_:)))
         )
         menu.addItem(
@@ -183,10 +179,6 @@ final class NotchWindow: NSPanel {
         let item = NSMenuItem(title: title, action: action, keyEquivalent: "")
         item.target = self
         return item
-    }
-
-    @objc private func setGoal(_ sender: NSMenuItem) {
-        onSetGoal?()
     }
 
     @objc private func checkNow(_ sender: NSMenuItem) {

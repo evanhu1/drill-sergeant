@@ -2,8 +2,8 @@
 
 Drill sergeant that watches your screen and shouts at you when off task.
 
-Drill Sergeant lives in your MacBook notch. It checks your screen against the goal you set and
-calls out distractions until you get back to work.
+Drill Sergeant lives in your MacBook notch. It watches your screen and calls out slacking until
+you get back to work.
 
 ## Install
 
@@ -17,9 +17,9 @@ vision model.
 ## How it works
 
 Every 10 minutes, Drill Sergeant captures the current screen and active window, then asks a local
-Ollama vision model whether they match your goal. Its notch eyes move between idle, watching,
-angry, and happy states. When it catches a distraction, it checks again every 30 seconds until the
-distraction is gone.
+Ollama vision model whether you're working or slacking off. Its notch eyes move between idle,
+watching, angry, and happy states. When it catches a distraction, it checks again every 30 seconds
+until the distraction is gone.
 
 Nothing leaves your Mac. Screenshots and prompts are processed by Ollama on your machine.
 
