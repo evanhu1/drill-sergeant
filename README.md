@@ -75,6 +75,6 @@ launchctl setenv OLLAMA_MAX_LOADED_MODELS 1
 Quit Drill Sergeant, then remove the app and its model:
 
 ```bash
-rm -rf "/Applications/Drill Sergeant.app"
+rm -rf ~/"Applications/Drill Sergeant.app"
 ollama rm qwen3-vl:8b
 ```

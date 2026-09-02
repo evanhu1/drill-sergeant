@@ -19,6 +19,7 @@ readonly RELEASE_ASSET_URL="https://github.com/${REPOSITORY}/releases/latest/dow
 readonly OLLAMA_DOWNLOAD_URL="https://ollama.com/download/Ollama-darwin.zip"
 readonly BUNDLE_IDENTIFIER="com.evanhu.drillsergeant"
 readonly APP_NAME="Drill Sergeant.app"
+readonly APPLICATIONS_DIR="${HOME}/Applications"
 readonly MINIMUM_MACOS_VERSION="14.0"
 readonly LOW_MEMORY_LIMIT_BYTES=8589934592
 
@@ -152,7 +153,7 @@ ollama_is_running() {
 
 ollama_app_path() {
     local candidate
-    for candidate in "/Applications/Ollama.app" "${HOME}/Applications/Ollama.app"; do
+    for candidate in "${APPLICATIONS_DIR}/Ollama.app" "/Applications/Ollama.app"; do
         if [[ -d "${candidate}" ]]; then
             printf '%s\n' "${candidate}"
             return 0
@@ -167,7 +168,6 @@ ollama_app_path() {
 install_ollama() {
     local archive="${work_dir}/Ollama-darwin.zip"
     local staging="${work_dir}/ollama"
-    local destination="/Applications"
 
     curl -fsL --retry 3 --retry-delay 1 -o "${archive}" "${OLLAMA_DOWNLOAD_URL}" \
         2>/dev/null || return 1
@@ -175,11 +175,10 @@ install_ollama() {
     ditto -x -k "${archive}" "${staging}" 2>/dev/null || return 1
     [[ -d "${staging}/Ollama.app" ]] || return 1
 
-    [[ -w "${destination}" ]] || destination="${HOME}/Applications"
-    mkdir -p "${destination}"
-    rm -rf "${destination}/Ollama.app"
-    ditto "${staging}/Ollama.app" "${destination}/Ollama.app" 2>/dev/null || return 1
-    xattr -dr com.apple.quarantine "${destination}/Ollama.app" 2>/dev/null || true
+    mkdir -p "${APPLICATIONS_DIR}"
+    rm -rf "${APPLICATIONS_DIR}/Ollama.app"
+    ditto "${staging}/Ollama.app" "${APPLICATIONS_DIR}/Ollama.app" 2>/dev/null || return 1
+    xattr -dr com.apple.quarantine "${APPLICATIONS_DIR}/Ollama.app" 2>/dev/null || true
 }
 
 start_ollama() {
@@ -296,13 +295,23 @@ reset_stale_screen_grant() {
     tccutil reset ScreenCapture "${BUNDLE_IDENTIFIER}" >/dev/null 2>&1 || true
 }
 
+# Earlier installers put the app in /Applications. Leaving that copy behind would give
+# the user two Drill Sergeants and a login item pointing at the old one.
+remove_legacy_copy() {
+    local legacy="/Applications/${APP_NAME}"
+    [[ -d "${legacy}" ]] || return 0
+    if rm -rf "${legacy}" 2>/dev/null; then
+        tccutil reset ScreenCapture "${BUNDLE_IDENTIFIER}" >/dev/null 2>&1 || true
+        return 0
+    fi
+    return 1
+}
+
 install_app() {
     local source_app="$1"
-    local destination="/Applications"
-    [[ -w "${destination}" ]] || destination="${HOME}/Applications"
-    mkdir -p "${destination}"
+    mkdir -p "${APPLICATIONS_DIR}"
 
-    local installed="${destination}/${APP_NAME}"
+    local installed="${APPLICATIONS_DIR}/${APP_NAME}"
     reset_stale_screen_grant "${installed}" "${source_app}"
 
     pkill -f "${APP_NAME}/Contents/MacOS/DrillSergeant" 2>/dev/null || true
@@ -367,9 +376,14 @@ main() {
     fi
 
     step "Installing"
+    local legacy_copy_remains=0
+    remove_legacy_copy || legacy_copy_remains=1
     local installed_app
     installed_app="$(install_app "${source_app}")"
     done_step "Installed" "${installed_app/#${HOME}/~}"
+    if ((legacy_copy_remains)); then
+        note "Delete the old copy in /Applications — it needs an administrator."
+    fi
 
     step "Setting up Ollama"
     wait "${ollama_pid}" 2>/dev/null || true

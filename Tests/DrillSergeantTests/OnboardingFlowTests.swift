@@ -250,7 +250,7 @@ final class OnboardingFlowTests: XCTestCase {
 
         XCTAssertEqual(
             chat.lastShown?.text,
-            "Downloading my eyes — 42% (2.6 of 6.1 GB). This runs once."
+            "Downloading local LLM model — 42% (2.6 of 6.1 GB). This runs once."
         )
         XCTAssertEqual(chat.lastShown?.autoHide, false)
     }

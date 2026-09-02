@@ -589,22 +589,25 @@ via `open --env`.
 
 Curl-able one-liner: `curl -fsSL https://raw.githubusercontent.com/evanhu/drill-sergeant/main/install.sh | bash`
 
-Steps, each printed with a `==>` prefix:
-1. Check `uname -m == arm64` and macOS ≥ 14, else exit with a clear message.
-2. Check `xcode-select -p`; if missing run `xcode-select --install` and tell the user to rerun.
-3. Check Homebrew; if missing, print the brew install command and exit.
-4. Ollama: if `ollama` missing → `brew install --cask ollama`. If present but version < 0.12
-   → `brew upgrade --cask ollama || brew upgrade ollama || true` and re-check; if still old, print
-   "Update Ollama from https://ollama.com/download" and continue.
-5. Start Ollama if `curl -s 127.0.0.1:11434` fails: `open -a Ollama` if the app exists, else
-   `nohup ollama serve >/dev/null 2>&1 &`. Wait up to 30s for the port.
-6. `ollama pull ${DS_MODEL:-qwen3-vl:8b}` (show progress).
-7. Clone or update the repo into `~/.drill-sergeant/src` (`git clone` or `git pull`).
-   If `install.sh` is run from inside a checkout (`Scripts/bundle.sh` exists next to it), use that checkout instead.
-8. `Scripts/bundle.sh`, then `rm -rf "/Applications/Drill Sergeant.app"` and copy the new bundle there.
-9. `open -n "/Applications/Drill Sergeant.app"` and print: "Drill Sergeant is in your notch. Follow the chat bubble."
+Nothing may be required in advance: no Xcode, no Homebrew, no compiler. The model download
+must not block the terminal — the app fetches it and shows progress in the bubble.
 
-Idempotent: safe to run twice.
+Steps, each a spinner line that resolves to a tick:
+1. Check `uname -m == arm64` and macOS ≥ 14, else exit with a clear message.
+2. On a Mac with ≤ 8 GB, set the low-memory Ollama options with `launchctl setenv`.
+3. Start a background job for Ollama so it overlaps the app download. If the port answers,
+   do nothing. If `Ollama.app` or the `ollama` binary exists, start it. Otherwise download
+   `https://ollama.com/download/Ollama-darwin.zip` and install it to `~/Applications`. Wait up
+   to 30s for the port and report through a status file.
+4. Download `DrillSergeant.zip` from the latest GitHub release. On 404 — or with
+   `DS_FROM_SOURCE=1` — clone `~/.drill-sergeant/src` at `${DS_REF:-main}` and run
+   `Scripts/bundle.sh`, which is the only path that needs the Command Line Tools.
+5. Install to `~/Applications`, which never needs an administrator. Delete a copy left in
+   `/Applications` by an older installer, quit any running instance, clear quarantine, and
+   clear the Screen Recording grant when the code signature changed.
+6. `open -n` the installed app.
+
+Idempotent: safe to run twice, and a second run is an update.
 
 ---
 

@@ -319,13 +319,13 @@ final class OnboardingFlow {
             return "My download stumbled (\(reason)). Trying again."
         case let .downloading(fraction, detail):
             guard let fraction else {
-                return "Downloading my eyes — a 6 GB vision model. This runs once."
+                return "Downloading local LLM model — 6 GB. This runs once."
             }
             let percent = Int((fraction * 100).rounded())
             guard let detail else {
-                return "Downloading my eyes — \(percent)%. This runs once."
+                return "Downloading local LLM model — \(percent)%. This runs once."
             }
-            return "Downloading my eyes — \(percent)% (\(detail)). This runs once."
+            return "Downloading local LLM model — \(percent)% (\(detail)). This runs once."
         }
     }
 
