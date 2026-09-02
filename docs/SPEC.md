@@ -70,7 +70,7 @@ Transitions (Scheduler drives these):
 
 | From | Event | To |
 |---|---|---|
-| idle | 60s before next check | watching |
+| idle | 30s before next check | watching |
 | watching | capture + LLM done, decision `set_idle` | idle (next check in `intervalMinutes`) |
 | watching | decision `set_angry` | angry |
 | watching | decision `snooze(n)` | idle (next check in `n` minutes) |
@@ -84,7 +84,7 @@ Transitions (Scheduler drives these):
 Rules:
 - `intervalMinutes` default 10. The timer always resets after a decision.
 - Entering `happy` from `angry` also resets the timer to `intervalMinutes` (or the snooze length).
-- The 60s pre-roll `watching` state is skipped when the remaining time is already under 60s.
+- The 30s pre-roll `watching` state is skipped when the remaining time is already under 30s.
 - The angry poll: every 30s capture + LLM. It never enters `watching`; eyes already track the cursor.
 
 ### 2.1 Scheduler interface
@@ -113,7 +113,7 @@ enum CheckReason { case scheduled, angryPoll, manual, onboarding }
 
 @MainActor
 final class Scheduler {
-    init(clock: Clock, intervalMinutes: Int = 10, preRollSeconds: TimeInterval = 60,
+    init(clock: Clock, intervalMinutes: Int = 10, preRollSeconds: TimeInterval = 30,
          angryPollSeconds: TimeInterval = 30, happySeconds: TimeInterval = 30)
     weak var delegate: SchedulerDelegate?
     private(set) var state: CompanionState          // starts .idle
@@ -1036,3 +1036,11 @@ was already restarted moves on without a second click.
 
 `Scripts/bundle.sh` signs with `codesign --force --sign -`. `--deep` is a verification flag, and
 Apple advises against signing with it.
+
+## 23. Dev launch resets the screen-recording grant
+
+`Scripts/run.sh` runs `tccutil reset ScreenCapture com.evanhu.drillsergeant` after building and
+before launching. The ad-hoc signature's designated requirement is a bare cdhash, so every rebuild
+invalidates the grant while System Settings still lists the app as allowed and capture fails
+silently. Resetting turns that into a fresh prompt. A stable self-signed identity would remove the
+need for this entirely.

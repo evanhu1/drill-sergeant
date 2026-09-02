@@ -12,13 +12,13 @@ final class SchedulerTests: XCTestCase {
         scheduler.start()
         XCTAssertEqual(scheduler.nextCheckAt, Date(timeIntervalSince1970: 600))
 
-        clock.advance(by: 539)
+        clock.advance(by: 569)
         XCTAssertEqual(scheduler.state, .idle)
         clock.advance(by: 1)
         XCTAssertEqual(scheduler.state, .watching)
         XCTAssertTrue(delegate.requests.isEmpty)
 
-        clock.advance(by: 60)
+        clock.advance(by: 30)
         XCTAssertEqual(delegate.requests.count, 1)
         XCTAssertScheduled(delegate.requests[0])
 

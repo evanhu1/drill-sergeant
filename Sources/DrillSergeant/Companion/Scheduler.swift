@@ -53,7 +53,7 @@ final class Scheduler {
     init(
         clock: Clock,
         intervalMinutes: Int = 10,
-        preRollSeconds: TimeInterval = 60,
+        preRollSeconds: TimeInterval = 30,
         angryPollSeconds: TimeInterval = 30,
         happySeconds: TimeInterval = 30
     ) {
