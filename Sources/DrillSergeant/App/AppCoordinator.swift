@@ -57,6 +57,7 @@ final class AppCoordinator: SchedulerDelegate {
         notchWindow.onSetGoal = { [weak self] in self?.promptForGoal() }
         notchWindow.onCheckNow = { [weak self] in self?.checkNow() }
         notchWindow.onQuit = { [weak self] in self?.quit() }
+        chat.onVisibilityChange = { notchWindow.setTrayPinned($0) }
         notchWindow.showOnScreen()
 
         Log.info(

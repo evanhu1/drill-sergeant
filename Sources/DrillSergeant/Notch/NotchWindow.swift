@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftUI
 
 @MainActor
@@ -11,19 +12,31 @@ final class NotchWindow: NSPanel {
 
     private let eyesModel: EyesModel
     private var detectedGeometry: NotchGeometry
-    private let hostingView: NSHostingView<NotchPanelContent>
+    private let trayController: TrayController
+    private let presentationModel: NotchPresentationModel
+    private let hostingView: HoverTrackingHostingView<NotchPanelHost>
+    private var stateCancellable: AnyCancellable?
 
     var geometry: NotchGeometry { detectedGeometry }
 
     init(eyesModel: EyesModel) {
         let geometry = Self.detectGeometry()
+        let presentationModel = NotchPresentationModel(
+            notchHeight: geometry.notchRect.height,
+            panelHeight: Self.panelHeight
+        )
+        let trayController = TrayController(
+            clock: SystemClock(),
+            state: eyesModel.state
+        )
         self.eyesModel = eyesModel
         self.detectedGeometry = geometry
-        self.hostingView = NSHostingView(
-            rootView: NotchPanelContent(
-                model: eyesModel,
-                notchHeight: geometry.notchRect.height,
-                panelHeight: Self.panelHeight
+        self.trayController = trayController
+        self.presentationModel = presentationModel
+        self.hostingView = HoverTrackingHostingView(
+            rootView: NotchPanelHost(
+                eyesModel: eyesModel,
+                presentationModel: presentationModel
             )
         )
 
@@ -53,6 +66,16 @@ final class NotchWindow: NSPanel {
         hostingView.autoresizingMask = [.width, .height]
         contentView = hostingView
 
+        trayController.onExtensionChange = { [weak self] extended in
+            self?.setTrayOffset(extended: extended, animated: true)
+        }
+        hostingView.onHoverChange = { [weak trayController] hovering in
+            trayController?.setHovering(hovering)
+        }
+        stateCancellable = eyesModel.$state.sink { [weak trayController] state in
+            trayController?.setState(state)
+        }
+
         NotificationCenter.default.addObserver(
             self,
             selector: #selector(screenParametersDidChange(_:)),
@@ -68,6 +91,15 @@ final class NotchWindow: NSPanel {
     func showOnScreen() {
         updateGeometry()
         orderFrontRegardless()
+    }
+
+    func setTrayPinned(_ pinned: Bool) {
+        trayController.setPinned(pinned)
+    }
+
+    func setTrayExtended(_ extended: Bool, animated: Bool = true) {
+        setTrayOffset(extended: extended, animated: animated)
+        trayController.setExtended(extended)
     }
 
     override func sendEvent(_ event: NSEvent) {
@@ -91,11 +123,20 @@ final class NotchWindow: NSPanel {
         detectedGeometry = Self.detectGeometry()
         let panelFrame = detectedGeometry.panelFrame(panelHeight: Self.panelHeight)
         setFrame(panelFrame, display: true)
-        hostingView.rootView = NotchPanelContent(
-            model: eyesModel,
-            notchHeight: detectedGeometry.notchRect.height,
-            panelHeight: Self.panelHeight
-        )
+        presentationModel.notchHeight = detectedGeometry.notchRect.height
+    }
+
+    private func setTrayOffset(extended: Bool, animated: Bool) {
+        let offset = extended ? 0 : Self.panelHeight
+        guard presentationModel.trayOffset != offset else { return }
+
+        if animated {
+            withAnimation(.easeInOut(duration: 0.3)) {
+                presentationModel.trayOffset = offset
+            }
+        } else {
+            presentationModel.trayOffset = offset
+        }
     }
 
     private static func detectGeometry() -> NotchGeometry {
@@ -153,17 +194,43 @@ final class NotchWindow: NSPanel {
     }
 }
 
-private struct NotchPanelContent: View {
+@MainActor
+private final class NotchPresentationModel: ObservableObject {
+    @Published var notchHeight: CGFloat
+    @Published var trayOffset: CGFloat = 0
+    let panelHeight: CGFloat
+
+    init(notchHeight: CGFloat, panelHeight: CGFloat) {
+        self.notchHeight = notchHeight
+        self.panelHeight = panelHeight
+    }
+}
+
+@MainActor
+private struct NotchPanelHost: View {
+    @ObservedObject var eyesModel: EyesModel
+    @ObservedObject var presentationModel: NotchPresentationModel
+
+    var body: some View {
+        NotchPanelContent(
+            model: eyesModel,
+            notchHeight: presentationModel.notchHeight,
+            panelHeight: presentationModel.panelHeight,
+            trayOffset: presentationModel.trayOffset
+        )
+    }
+}
+
+@MainActor
+struct NotchPanelContent: View {
     @ObservedObject var model: EyesModel
     let notchHeight: CGFloat
     let panelHeight: CGFloat
+    let trayOffset: CGFloat
 
     var body: some View {
-        ZStack(alignment: .bottom) {
-            VStack(spacing: 0) {
-                Rectangle()
-                    .fill(.black)
-                    .frame(height: notchHeight)
+        ZStack(alignment: .top) {
+            ZStack(alignment: .bottom) {
                 UnevenRoundedRectangle(
                     topLeadingRadius: 0,
                     bottomLeadingRadius: 14,
@@ -173,10 +240,47 @@ private struct NotchPanelContent: View {
                 )
                 .fill(.black)
                 .frame(height: panelHeight)
-            }
 
-            EyesView(model: model)
-                .frame(height: panelHeight)
+                EyesView(model: model)
+                    .frame(height: panelHeight)
+            }
+            .frame(height: panelHeight)
+            .offset(y: notchHeight - trayOffset)
+
+            Rectangle()
+                .fill(.black)
+                .frame(height: notchHeight)
         }
+        .frame(height: notchHeight + panelHeight, alignment: .top)
+        .clipped()
+    }
+}
+
+@MainActor
+private final class HoverTrackingHostingView<Content: View>: NSHostingView<Content> {
+    var onHoverChange: ((Bool) -> Void)?
+    private var hoverTrackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let hoverTrackingArea {
+            removeTrackingArea(hoverTrackingArea)
+        }
+        let newTrackingArea = NSTrackingArea(
+            rect: .zero,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(newTrackingArea)
+        hoverTrackingArea = newTrackingArea
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        onHoverChange?(true)
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onHoverChange?(false)
     }
 }

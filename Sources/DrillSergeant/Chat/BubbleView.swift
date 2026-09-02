@@ -9,6 +9,7 @@ final class BubbleModel: ObservableObject {
 
     var onReply: ((String) -> Void)?
     var onTap: (() -> Void)?
+    var onClose: (() -> Void)?
     var onInputStateChange: ((Bool) -> Void)?
 
     func replaceText(_ text: String) {
@@ -42,6 +43,11 @@ final class BubbleModel: ObservableObject {
         closeInput()
         onReply?(reply)
     }
+
+    func requestClose() {
+        closeInput()
+        onClose?()
+    }
 }
 
 struct BubbleView: View {
@@ -49,6 +55,7 @@ struct BubbleView: View {
     let onHeightChange: (CGFloat) -> Void
 
     @FocusState private var isReplyFocused: Bool
+    @State private var isCloseHovered = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -59,16 +66,14 @@ struct BubbleView: View {
                     BubbleTailOutline()
                         .stroke(.white.opacity(0.1), lineWidth: 1)
                 }
+                .contentShape(Rectangle())
+                .onTapGesture(perform: handleBubbleTap)
 
             content
         }
         .frame(width: BubbleStyle.width)
         .fixedSize(horizontal: false, vertical: true)
         .contentShape(Rectangle())
-        .onTapGesture {
-            guard !model.isInputOpen else { return }
-            model.handleTap()
-        }
         .onHover { hovering in
             withAnimation(.easeInOut(duration: 0.15)) {
                 model.isHovered = hovering
@@ -88,6 +93,7 @@ struct BubbleView: View {
                 .lineLimit(10)
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.trailing, 14)
 
             if model.isInputOpen {
                 replyField
@@ -112,7 +118,44 @@ struct BubbleView: View {
                         .stroke(.white.opacity(0.1), lineWidth: 1)
                 }
         }
+        .contentShape(Rectangle())
+        .onTapGesture(perform: handleBubbleTap)
+        .overlay(alignment: .topTrailing) {
+            closeButton
+                .padding(8)
+        }
         .animation(.easeInOut(duration: 0.2), value: model.isInputOpen)
+    }
+
+    private var closeButton: some View {
+        Button {
+            model.requestClose()
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 8, weight: .semibold))
+                .foregroundStyle(
+                    Color(nsColor: .secondaryLabelColor)
+                        .opacity(isCloseHovered ? 1 : 0.6)
+                )
+                .frame(width: 14, height: 14)
+                .background {
+                    Circle()
+                        .fill(.white.opacity(isCloseHovered ? 0.12 : 0.07))
+                }
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering in
+            withAnimation(.easeInOut(duration: 0.12)) {
+                isCloseHovered = hovering
+            }
+        }
+        .accessibilityLabel("Close")
+    }
+
+    private func handleBubbleTap() {
+        guard !model.isInputOpen else { return }
+        model.handleTap()
     }
 
     private var replyField: some View {

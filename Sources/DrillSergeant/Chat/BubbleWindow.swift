@@ -22,6 +22,8 @@ final class BubbleWindow: NSPanel, ChatPresenter {
     private var autoHideTask: Task<Void, Never>?
     private var animationGeneration = 0
 
+    var onVisibilityChange: ((Bool) -> Void)?
+
     var onReply: ((String) -> Void)? {
         didSet { model.onReply = onReply }
     }
@@ -106,6 +108,7 @@ final class BubbleWindow: NSPanel, ChatPresenter {
                 self.orderOut(nil)
                 self.presentationOffset = 0
                 self.positionPanel()
+                self.onVisibilityChange?(false)
             }
         }
     }
@@ -145,6 +148,9 @@ final class BubbleWindow: NSPanel, ChatPresenter {
     }
 
     private func connectModel() {
+        model.onClose = { [weak self] in
+            self?.hide()
+        }
         model.onInputStateChange = { [weak self] isOpen in
             self?.inputStateDidChange(isOpen)
         }
@@ -176,6 +182,7 @@ final class BubbleWindow: NSPanel, ChatPresenter {
         alphaValue = 0
         positionPanel()
         orderFrontRegardless()
+        onVisibilityChange?(true)
 
         presentationOffset = 0
         NSAnimationContext.runAnimationGroup { context in
