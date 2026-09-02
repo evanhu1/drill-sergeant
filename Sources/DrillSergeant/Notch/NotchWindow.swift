@@ -256,13 +256,30 @@ struct NotchPanelContent: View {
             .frame(height: panelHeight)
             .offset(y: notchHeight - trayOffset)
 
-            Rectangle()
-                .fill(.black)
-                .frame(height: notchHeight)
+            UnevenRoundedRectangle(
+                topLeadingRadius: 0,
+                bottomLeadingRadius: notchBottomRadius,
+                bottomTrailingRadius: notchBottomRadius,
+                topTrailingRadius: 0,
+                style: .continuous
+            )
+            .fill(.black)
+            .frame(height: notchHeight)
         }
         .frame(height: notchHeight + panelHeight, alignment: .top)
         .clipped()
     }
+
+    /// Square while the tray hangs below (the two shapes read as one), rounding out to match the
+    /// hardware notch as the tray retracts. Without this the hidden tray leaves black square
+    /// corners sticking out past the notch's curve.
+    private var notchBottomRadius: CGFloat {
+        guard panelHeight > 0 else { return 0 }
+        let hidden = min(max(trayOffset / panelHeight, 0), 1)
+        return NotchPanelContent.hiddenCornerRadius * hidden
+    }
+
+    static let hiddenCornerRadius: CGFloat = 9
 }
 
 @MainActor
