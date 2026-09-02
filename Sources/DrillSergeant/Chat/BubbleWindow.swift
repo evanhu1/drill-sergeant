@@ -4,7 +4,7 @@ import SwiftUI
 
 @MainActor
 final class BubbleWindow: NSPanel, ChatPresenter {
-    private static let width: CGFloat = 320
+    private static let width: CGFloat = 320 + 2 * 16
     private static let initialHeight: CGFloat = 70
     private static let notchGap: CGFloat = 8
     private static let animationOffset: CGFloat = 6
@@ -123,7 +123,7 @@ final class BubbleWindow: NSPanel, ChatPresenter {
         ]
         backgroundColor = .clear
         isOpaque = false
-        hasShadow = true
+        hasShadow = false
         hidesOnDeactivate = false
         isMovable = false
         ignoresMouseEvents = false

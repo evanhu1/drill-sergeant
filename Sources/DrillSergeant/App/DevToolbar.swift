@@ -23,10 +23,21 @@ final class DevToolbar: NSPanel {
         contentMaxSize = CGSize(width: 360, height: 1200)
         contentView = hostingView
         level = .floating
-        center()
+        placeInTopRightCorner()
     }
 
     override var canBecomeKey: Bool { true }
+
+    /// Keeps the toolbar out from under the notch and the bubble.
+    private func placeInTopRightCorner() {
+        guard let screen = NSScreen.main else { center(); return }
+        let visible = screen.visibleFrame
+        let margin: CGFloat = 20
+        setFrameOrigin(CGPoint(
+            x: visible.maxX - frame.width - margin,
+            y: visible.maxY - frame.height - margin
+        ))
+    }
 
     func show() {
         orderFrontRegardless()

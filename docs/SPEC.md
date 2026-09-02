@@ -381,7 +381,7 @@ Otherwise synthesize a notch 200pt wide × 32pt tall centered at the top (`hasPh
 - Content: `NSHostingView(rootView: EyesView(model:))` on a black rounded shape:
   the notch part is a plain rectangle, the hanging part has bottom corners radius 14.
   On screens without a physical notch draw the whole shape black too.
-- Right-click (or ctrl-click) anywhere shows an `NSMenu`: **Set goal…**, **Check now**, separator, **Quit Drill Sergeant** (⌘Q).
+- Right-click (or ctrl-click) anywhere shows an `NSMenu`: **Check now**, **Developer…**, separator, **Quit Drill Sergeant** (⌘Q).
 - Hover over the eyes is a no-op in V1.
 
 ### 5.3 EyesView
@@ -529,8 +529,8 @@ final class AppCoordinator: SchedulerDelegate {
 
 Behavior:
 - `start()`: create `EyesModel`, `NotchWindow`, `BubbleWindow`, `Scheduler(clock: SystemClock())`,
-  `OllamaClient(model: settings.model)`, `Conversation`. Hook the notch menu to `promptForGoal`,
-  `checkNow`, `quit`. If `settings.onboardingStep != .done` run `OnboardingFlow`; else
+  `OllamaClient(model: settings.model)`, `Conversation`. Hook the notch menu to `checkNow`,
+  `showDeveloperToolbar`, and `quit`. If `settings.onboardingStep != .done` run `OnboardingFlow`; else
   `scheduler.start()`.
 - `scheduler(didChange:)`: update `eyesModel.state`; start/stop `CursorTracker` for
   watching/angry; when state becomes idle after happy, hide the bubble if not in reply mode.

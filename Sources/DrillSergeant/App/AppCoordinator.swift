@@ -56,7 +56,6 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         self.cursorTracker = cursorTracker
 
         scheduler.delegate = self
-        notchWindow.onSetGoal = { [weak self] in self?.promptForGoal() }
         notchWindow.onCheckNow = { [weak self] in self?.checkNow() }
         notchWindow.onDeveloper = { [weak self] in self?.showDeveloperToolbar() }
         notchWindow.onQuit = { [weak self] in self?.quit() }

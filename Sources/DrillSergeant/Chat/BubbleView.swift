@@ -85,7 +85,12 @@ struct BubbleView: View {
 
             content
         }
+        .compositingGroup()
+        .shadow(color: .black.opacity(0.22), radius: 9, y: 4)
+        .shadow(color: .black.opacity(0.10), radius: 1.5, y: 1)
         .frame(width: BubbleStyle.width)
+        .padding(.horizontal, BubbleStyle.outerPadding)
+        .padding(.bottom, BubbleStyle.outerPadding + 4)
         .fixedSize(horizontal: false, vertical: true)
         .contentShape(Rectangle())
         .onHover { hovering in
@@ -214,6 +219,8 @@ struct BubbleView: View {
 
 private enum BubbleStyle {
     static let width: CGFloat = 320
+    /// Room around the bubble for its shadow; the window is this much wider on each side.
+    static let outerPadding: CGFloat = 16
     static let cornerRadius: CGFloat = 20
     static let tailWidth: CGFloat = 26
     static let tailHeight: CGFloat = 12
