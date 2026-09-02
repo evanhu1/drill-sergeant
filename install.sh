@@ -1,7 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-readonly REPOSITORY_URL="https://github.com/evanhu/drill-sergeant.git"
+readonly REPOSITORY_URL="https://github.com/evanhu1/drill-sergeant.git"
 readonly MINIMUM_MACOS_VERSION="14.0"
 readonly MINIMUM_OLLAMA_VERSION="0.12"
 
