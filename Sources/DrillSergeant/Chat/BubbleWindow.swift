@@ -14,7 +14,7 @@ final class BubbleWindow: NSPanel, ChatPresenter {
     private let notchGeometry: () -> NotchGeometry
     private let notchPanelHeight: CGFloat
     private let model: BubbleModel
-    private let hostingView: NSHostingView<BubbleView>
+    private let hostingView: BubbleHostingView<BubbleView>
 
     private var measuredHeight = BubbleWindow.initialHeight
     private var presentationOffset: CGFloat = 0
@@ -42,7 +42,7 @@ final class BubbleWindow: NSPanel, ChatPresenter {
     ) {
         let model = BubbleModel()
         let view = BubbleView(model: model) { _ in }
-        let hostingView = NSHostingView(rootView: view)
+        let hostingView = BubbleHostingView(rootView: view)
 
         self.notchGeometry = notchGeometry
         self.notchPanelHeight = panelHeight
@@ -238,5 +238,35 @@ final class BubbleWindow: NSPanel, ChatPresenter {
     private func cancelAutoHide() {
         autoHideTask?.cancel()
         autoHideTask = nil
+    }
+}
+
+/// Hosting view that claims the mouse cursor for the whole bubble.
+///
+/// The bubble panel is non-activating, so it is rarely the key window and AppKit leaves the
+/// cursor to whatever window is underneath. Over a text area that means an I-beam. A
+/// `.cursorUpdate` tracking area works regardless of key status and restores the arrow. The
+/// reply field installs its own tracking area, so it still shows an I-beam when open.
+@MainActor
+final class BubbleHostingView<Content: View>: NSHostingView<Content> {
+    private var cursorTrackingArea: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let cursorTrackingArea {
+            removeTrackingArea(cursorTrackingArea)
+        }
+        let area = NSTrackingArea(
+            rect: .zero,
+            options: [.cursorUpdate, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        cursorTrackingArea = area
+    }
+
+    override func cursorUpdate(with event: NSEvent) {
+        NSCursor.arrow.set()
     }
 }

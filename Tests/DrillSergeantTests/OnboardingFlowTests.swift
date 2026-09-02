@@ -17,7 +17,8 @@ final class OnboardingFlowTests: XCTestCase {
 
         XCTAssertEqual(settings.onboardingStep, .goal)
         XCTAssertEqual(chat.askedMessages.count, 1)
-        XCTAssertTrue(chat.askedMessages[0].contains("what are you working on today?"))
+        XCTAssertTrue(chat.askedMessages[0].contains("Drill Sergeant reporting"))
+        XCTAssertTrue(chat.askedMessages[0].contains("never leaves your Mac"))
 
         chat.onReply?("Finish the launch")
 

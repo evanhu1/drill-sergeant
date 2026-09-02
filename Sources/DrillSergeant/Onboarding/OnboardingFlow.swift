@@ -96,9 +96,8 @@ final class OnboardingFlow {
             beginPermissionStep()
         }
         chat.ask(
-            "Drill Sergeant reporting. I watch your screen every 10 minutes and shout when "
-                + "you slack off. Everything runs on a local model. Nothing leaves this Mac. "
-                + "First: what are you working on today?"
+            "Drill Sergeant reporting. I watch your screen and shout at you when you slack "
+                + "off. Everything runs on a local AI model, and your data never leaves your Mac."
         )
     }
 
@@ -209,7 +208,7 @@ final class OnboardingFlow {
             }
             self?.beginTestCheck()
         }
-        chat.show("Let's test it. Open YouTube. I'm watching.", autoHide: false)
+        chat.show("Let's test it, open up YouTube.", autoHide: false)
         scheduler.enterWatching()
         startYouTubePolling()
     }
