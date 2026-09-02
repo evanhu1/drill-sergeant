@@ -4,6 +4,18 @@ import SwiftUI
 enum GazeMapper {
     private static let power: CGFloat = 0.55
 
+    /// 1 when the cursor is within `near` points of the face, fading to 0 by `far`.
+    static func proximity(
+        mouseLocation: CGPoint,
+        panelCenter: CGPoint,
+        near: CGFloat = 60,
+        far: CGFloat = 360
+    ) -> CGFloat {
+        let distance = hypot(mouseLocation.x - panelCenter.x, mouseLocation.y - panelCenter.y)
+        guard far > near else { return distance <= near ? 1 : 0 }
+        return (1 - (distance - near) / (far - near)).clamped(to: 0 ... 1)
+    }
+
     /// Maps screen-space cursor movement to normalized pupil travel.
     static func map(
         mouseLocation: CGPoint,
@@ -64,6 +76,7 @@ final class CursorTracker {
         pollingTask = nil
         withAnimation(.easeInOut(duration: 0.25)) {
             eyesModel.gaze = .zero
+            eyesModel.proximity = 0
         }
     }
 
@@ -75,13 +88,20 @@ final class CursorTracker {
             return
         }
 
+        let mouseLocation = NSEvent.mouseLocation
+        let panelCenter = CGPoint(x: window.frame.midX, y: window.frame.midY)
         let mappedGaze = GazeMapper.map(
-            mouseLocation: NSEvent.mouseLocation,
-            panelCenter: CGPoint(x: window.frame.midX, y: window.frame.midY),
+            mouseLocation: mouseLocation,
+            panelCenter: panelCenter,
             screenSize: screenFrame.size
+        )
+        let proximity = GazeMapper.proximity(
+            mouseLocation: mouseLocation,
+            panelCenter: panelCenter
         )
         withAnimation(.easeOut(duration: 0.12)) {
             eyesModel.gaze = mappedGaze
+            eyesModel.proximity = proximity
         }
     }
 

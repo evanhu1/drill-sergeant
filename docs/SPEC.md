@@ -966,3 +966,25 @@ image bytes into `app.log`.
 
 `DevActions` gains `func openTraceFolder()`, wired to a **Traces** section in the developer
 toolbar with an "Open trace folder" button that reveals the directory in Finder.
+
+## 20. Expressive eyes (adds to 15)
+
+Seven behaviours layered on the section 15 design. All are driven from `EyesView` and `EyesModel`;
+the coordinator only reports what the user is doing.
+
+- **Saccades** (idle only): every 2–5s the pupils flick by up to ±0.35 x / ±0.2 y of gaze range
+  for 120–200ms, then return. Skipped while glancing at the bubble.
+- **Lid follows gaze**: the upper lid drops by `max(0, gaze.y) × 0.2` of the eye height when the
+  pupils look down. Looking up widens the eye by up to 5% instead, since there is no lid above.
+- **Convergence**: `EyesModel.proximity` is 1 when the cursor is within 60pt of the panel centre,
+  fading to 0 at 360pt. Each pupil shifts inward by `1.6pt × proximity`.
+- **Scanning while watching**: on entering `watching`, the lids drop a further 25% and the pupils
+  sweep left → right → back over ~1.9s, then release and lock onto the cursor.
+- **Glance at the bubble**: `EyesModel.attention` is `.bubble` when a message appears (eyes look
+  down at it for 0.7s), `.typing` while the reply field is open (eyes stay on the field), and
+  `.cursor` otherwise. `BubbleWindow.onInputStateChange` reports the field.
+- **Head tilt**: the eye pair rotates by `gaze.x × 4°`.
+- **Lean**: the eye pair offsets by `(gaze.x × 2pt, gaze.y × 1.5pt)`.
+
+Static render inputs: `proximity`, `scanPhase` (0…1) and `attention` on `EyesView` and
+`NotchPanelContent`. New renders: `watching-scan.png`, `idle-near.png`, `glance-bubble.png`.

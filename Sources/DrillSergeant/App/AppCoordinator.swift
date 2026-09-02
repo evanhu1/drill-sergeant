@@ -61,7 +61,18 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         notchWindow.onCheckNow = { [weak self] in self?.checkNow() }
         notchWindow.onDeveloper = { [weak self] in self?.showDeveloperToolbar() }
         notchWindow.onQuit = { [weak self] in self?.quit() }
-        chat.onVisibilityChange = { notchWindow.setTrayPinned($0) }
+        chat.onVisibilityChange = { [weak eyesModel] visible in
+            notchWindow.setTrayPinned(visible)
+            guard let eyesModel else { return }
+            if visible {
+                eyesModel.attention = .bubble
+            } else if eyesModel.attention != .cursor {
+                eyesModel.attention = .cursor
+            }
+        }
+        chat.onInputStateChange = { [weak eyesModel] isOpen in
+            eyesModel?.attention = isOpen ? .typing : .cursor
+        }
         notchWindow.showOnScreen()
         cursorTracker.start()
 

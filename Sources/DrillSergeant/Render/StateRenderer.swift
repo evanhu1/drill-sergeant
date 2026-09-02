@@ -73,6 +73,32 @@ enum StateRenderer {
             rendered: &rendered
         )
         try renderNotch(
+            name: "watching-scan.png",
+            state: .watching,
+            blinkProgress: 0,
+            scanPhase: 0.25,
+            outputURL: outputURL,
+            rendered: &rendered
+        )
+        try renderNotch(
+            name: "idle-near.png",
+            state: .idle,
+            blinkProgress: 0,
+            gaze: CGPoint(x: 0.05, y: 0.5),
+            proximity: 1,
+            outputURL: outputURL,
+            rendered: &rendered
+        )
+        try renderNotch(
+            name: "glance-bubble.png",
+            state: .idle,
+            blinkProgress: 0,
+            gaze: CGPoint(x: 0.7, y: -0.4),
+            attention: .bubble,
+            outputURL: outputURL,
+            rendered: &rendered
+        )
+        try renderNotch(
             name: "happy.png",
             state: .happy,
             outputURL: outputURL,
@@ -113,6 +139,9 @@ enum StateRenderer {
         blinkProgress: CGFloat? = nil,
         gaze: CGPoint? = nil,
         trayOffset: CGFloat = 0,
+        proximity: CGFloat? = nil,
+        scanPhase: CGFloat? = nil,
+        attention: EyeAttention? = nil,
         outputURL: URL,
         rendered: inout [(name: String, image: NSImage)]
     ) throws {
@@ -127,7 +156,10 @@ enum StateRenderer {
                 trayOffset: trayOffset,
                 blinkProgress: blinkProgress,
                 gaze: gaze,
-                animationsEnabled: false
+                animationsEnabled: false,
+                proximity: proximity,
+                scanPhase: scanPhase,
+                attention: attention
             )
         }
         .frame(width: notchSize.width, height: notchSize.height)

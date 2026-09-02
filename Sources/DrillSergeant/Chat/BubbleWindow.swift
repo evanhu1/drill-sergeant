@@ -23,6 +23,8 @@ final class BubbleWindow: NSPanel, ChatPresenter {
     private var animationGeneration = 0
 
     var onVisibilityChange: ((Bool) -> Void)?
+    /// Fired when the reply field opens or closes.
+    var onInputStateChange: ((Bool) -> Void)?
 
     var onReply: ((String) -> Void)? {
         didSet { model.onReply = onReply }
@@ -160,6 +162,7 @@ final class BubbleWindow: NSPanel, ChatPresenter {
     }
 
     private func inputStateDidChange(_ isOpen: Bool) {
+        onInputStateChange?(isOpen)
         if isOpen {
             cancelAutoHide()
             NSApp.activate(ignoringOtherApps: true)
