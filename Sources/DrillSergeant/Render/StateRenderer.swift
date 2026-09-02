@@ -156,7 +156,8 @@ enum StateRenderer {
                 model: model,
                 staticHover: true,
                 autoFocusInput: false,
-                staticReplyText: inputOpen ? model.replyText : nil
+                staticReplyText: inputOpen ? model.replyText : nil,
+                drawsShadow: true
             ) { _ in }
         }
         .frame(width: size.width, height: size.height, alignment: .top)

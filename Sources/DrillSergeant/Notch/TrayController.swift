@@ -17,7 +17,7 @@ final class TrayController {
     init(
         clock: Clock,
         state: CompanionState = .idle,
-        idleDelay: TimeInterval = 5
+        idleDelay: TimeInterval = 3
     ) {
         self.clock = clock
         self.state = state

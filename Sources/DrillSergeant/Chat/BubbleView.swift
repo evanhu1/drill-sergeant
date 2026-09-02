@@ -56,6 +56,9 @@ struct BubbleView: View {
     var staticHover: Bool? = nil
     var autoFocusInput = true
     var staticReplyText: String? = nil
+    /// Draw the shadow in SwiftUI. The live bubble leaves it to the window server (see
+    /// `BubbleWindow`); only static renders need it drawn inside the view.
+    var drawsShadow = false
 
     @FocusState private var isReplyFocused: Bool
     @State private var isCloseHovered = false
@@ -65,12 +68,14 @@ struct BubbleView: View {
         staticHover: Bool? = nil,
         autoFocusInput: Bool = true,
         staticReplyText: String? = nil,
+        drawsShadow: Bool = false,
         onHeightChange: @escaping (CGFloat) -> Void
     ) {
         self.model = model
         self.staticHover = staticHover
         self.autoFocusInput = autoFocusInput
         self.staticReplyText = staticReplyText
+        self.drawsShadow = drawsShadow
         self.onHeightChange = onHeightChange
     }
 
@@ -85,12 +90,8 @@ struct BubbleView: View {
 
             content
         }
-        .compositingGroup()
-        .shadow(color: .black.opacity(0.22), radius: 9, y: 4)
-        .shadow(color: .black.opacity(0.10), radius: 1.5, y: 1)
         .frame(width: BubbleStyle.width)
-        .padding(.horizontal, BubbleStyle.outerPadding)
-        .padding(.bottom, BubbleStyle.outerPadding + 4)
+        .modifier(RenderShadow(enabled: drawsShadow))
         .fixedSize(horizontal: false, vertical: true)
         .contentShape(Rectangle())
         .onHover { hovering in
@@ -230,10 +231,10 @@ struct BubbleView: View {
     }
 }
 
-private enum BubbleStyle {
+enum BubbleStyle {
     static let width: CGFloat = 320
-    /// Room around the bubble for its shadow; the window is this much wider on each side.
-    static let outerPadding: CGFloat = 16
+    /// Margin a static render leaves around the bubble so its drawn shadow has room.
+    static let renderPadding: CGFloat = 16
     static let cornerRadius: CGFloat = 20
     /// Bottom margin kept clear for the reply hint when the input is closed.
     static let hintGutter: CGFloat = 22
@@ -277,5 +278,23 @@ private struct BubbleHeightPreferenceKey: PreferenceKey {
 
     static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
         value = max(value, nextValue())
+    }
+}
+
+/// Shadow for static renders only. The live bubble uses the window's shadow, which the window
+/// server draws outside the window and never clips.
+private struct RenderShadow: ViewModifier {
+    let enabled: Bool
+
+    func body(content: Content) -> some View {
+        if enabled {
+            content
+                .compositingGroup()
+                .shadow(color: .black.opacity(0.22), radius: 9, y: 4)
+                .shadow(color: .black.opacity(0.10), radius: 1.5, y: 1)
+                .padding(BubbleStyle.renderPadding)
+        } else {
+            content
+        }
     }
 }

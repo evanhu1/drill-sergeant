@@ -4,12 +4,12 @@ import SwiftUI
 
 @MainActor
 final class BubbleWindow: NSPanel, ChatPresenter {
-    private static let width: CGFloat = 320 + 2 * 16
+    private static let width = BubbleStyle.width
     private static let initialHeight: CGFloat = 70
     private static let notchGap: CGFloat = 8
     private static let animationOffset: CGFloat = 6
     private static let animationDuration: TimeInterval = 0.2
-    private static let autoHideDelay: UInt64 = 20_000_000_000
+    private static let autoHideDelay: UInt64 = 10_000_000_000
 
     private let notchGeometry: () -> NotchGeometry
     private let notchPanelHeight: CGFloat
@@ -122,7 +122,10 @@ final class BubbleWindow: NSPanel, ChatPresenter {
         ]
         backgroundColor = .clear
         isOpaque = false
-        hasShadow = false
+        // The window server draws this shadow from the content's alpha, outside the window
+        // frame. A SwiftUI `.shadow()` gets clipped to its own layer bounds when AppKit
+        // re-rasterizes the view, which happens a second or two after the window appears.
+        hasShadow = true
         hidesOnDeactivate = false
         isMovable = false
         ignoresMouseEvents = false
@@ -141,6 +144,7 @@ final class BubbleWindow: NSPanel, ChatPresenter {
             size: CGSize(width: Self.width, height: measuredHeight)
         )
         hostingView.autoresizingMask = [.width, .height]
+        hostingView.clipsToBounds = false
         hostingView.wantsLayer = true
         hostingView.layer?.backgroundColor = NSColor.clear.cgColor
         contentView = hostingView
@@ -181,6 +185,7 @@ final class BubbleWindow: NSPanel, ChatPresenter {
         alphaValue = 0
         positionPanel()
         orderFrontRegardless()
+        refreshShadow()
         onVisibilityChange?(true)
 
         presentationOffset = 0
@@ -208,6 +213,18 @@ final class BubbleWindow: NSPanel, ChatPresenter {
             ),
             display: isVisible
         )
+        refreshShadow()
+    }
+
+    /// The window shadow is cached from the content's alpha, so it has to be recomputed whenever
+    /// the bubble changes shape. Otherwise a stale shadow outlines the previous size.
+    private func refreshShadow() {
+        guard isVisible else { return }
+        invalidateShadow()
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.isVisible else { return }
+            self.invalidateShadow()
+        }
     }
 
     private func frameOrigin(offset: CGFloat) -> CGPoint {

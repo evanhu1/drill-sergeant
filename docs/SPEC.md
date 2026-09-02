@@ -434,7 +434,7 @@ stop otherwise.
 ```swift
 @MainActor
 protocol ChatPresenter: AnyObject {
-    /// Show a message bubble under the notch. `autoHide`: hide after 20s (idle/happy) or stay (angry/onboarding).
+    /// Show a message bubble under the notch. `autoHide`: hide after 10s (idle/happy) or stay (angry/onboarding).
     func show(_ text: String, autoHide: Bool)
     /// Show a message that expects a reply. The reply field opens only on click (see 16).
     func ask(_ text: String)
@@ -459,6 +459,9 @@ protocol ChatPresenter: AnyObject {
   reply input under the text: an `NSTextField`-style single-line input (SwiftUI `TextField`),
   placeholder "Talk back…", Return submits → `onReply(text)`, Esc closes the input.
 - While input is open the bubble does not auto-hide.
+- Depth comes from the window's own shadow (`hasShadow = true`, recomputed with `invalidateShadow()`
+  whenever the bubble resizes). A SwiftUI `.shadow()` is clipped to its layer bounds when AppKit
+  re-rasterizes the view a second or two after it appears, so it is used only for static renders.
 - Appear/disappear animation: fade + 6pt slide from the notch, 0.2s.
 - A new `show` while visible replaces the text (no stacking).
 
@@ -642,14 +645,14 @@ The hanging part of the notch panel (the "tray") has two positions:
 
 Rules (owned by `NotchWindow`, which observes `EyesModel.state`):
 - Tray is `extended` whenever state is `watching`, `angry`, or `happy`.
-- When state becomes `idle`, start a 5s timer. If still idle when it fires, and the tray is not
+- When state becomes `idle`, start a 3s timer. If still idle when it fires, and the tray is not
   pinned and the mouse is not over the panel, slide to `hidden`.
 - Any transition out of `idle` cancels the timer and extends immediately.
-- Mouse hover over the panel frame extends the tray; leaving restarts the 5s timer if idle.
+- Mouse hover over the panel frame extends the tray; leaving restarts the 3s timer if idle.
 - `func setTrayPinned(_ pinned: Bool)`: while pinned (the chat bubble is visible), the tray stays
-  extended. Unpinning restarts the 5s timer if idle.
+  extended. Unpinning restarts the 3s timer if idle.
 - `func setTrayExtended(_ extended: Bool, animated: Bool = true)` for dev tools.
-- Animation: `.easeInOut(duration: 0.3)`. The window frame does not change; only the content
+- Animation: `.easeInOut(duration: 0.5)`. The window frame does not change; only the content
   offset animates, so right-click still works on the notch area while hidden.
 
 `BubbleWindow` gains `var onVisibilityChange: ((Bool) -> Void)?` fired when the bubble is shown or
