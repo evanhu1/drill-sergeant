@@ -1370,6 +1370,20 @@ all cost the same; only exceeding 1280 costs more. And prefix caching, though wo
 repeated request, does not survive a changed image, so the system prompt and tool schemas are
 re-prefilled on every check.
 
+### 31.1 Coming back from angry is silent
+
+`set_idle` may return empty assistant text and stay quiet. That is right for the routine
+"still working" check, and it is what keeps that check at about sixteen output tokens. The
+model takes the option nearly every time.
+
+It is deliberate when the alarm is called off too. Requiring a line there costs a second
+round trip on the one transition the user is actually watching, and a small local model
+writes the same sentence every time, so the reward is a stock phrase for real latency.
+
+The angry bubble is the only one that never auto-hides, so nothing would replace it. It is
+dismissed instead: a silent verdict that is no longer angry takes the shout down. A reply in
+progress is left alone, because hiding the bubble closes the field mid-sentence.
+
 ## 32. Eight-gigabyte memory mode (amends 4.2, 5.1, 17.1, and 24)
 
 Keep `qwen3-vl:8b-instruct` as the default and only installed model. When

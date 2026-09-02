@@ -655,10 +655,34 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
                 + "snooze=\(decision.snoozeMinutes.map(String.init) ?? "none")"
         )
 
-        guard presentMessage, !decision.message.isEmpty else { return }
+        guard presentMessage else { return }
+        guard !decision.message.isEmpty else {
+            if AppCoordinator.dismissesStaleShout(
+                currentState: scheduler?.state ?? .idle,
+                decision: decision,
+                isReplying: chat?.isReplying == true
+            ) {
+                chat?.hide()
+            }
+            return
+        }
         chat?.onTap = nil
         chat?.affordance = .reply
         chat?.show(decision.message, autoHide: decision.tool != .set_angry)
+    }
+
+    /// Whether the bubble on screen is a shout the user has already answered.
+    ///
+    /// An angry bubble never times out, so it waits for a replacement. When the model calls
+    /// off the alarm without a word to say, nothing replaces it and the shout keeps
+    /// shouting at someone who is already back at work. Take it down instead. A reply in
+    /// progress is left alone: hiding the bubble would close the field mid-sentence.
+    static func dismissesStaleShout(
+        currentState: CompanionState,
+        decision: Decision,
+        isReplying: Bool
+    ) -> Bool {
+        currentState == .angry && decision.tool != .set_angry && !isReplying
     }
 
     private func finishReply(with outcome: DecisionOutcome?) {
