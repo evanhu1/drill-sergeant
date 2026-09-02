@@ -49,7 +49,8 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         }
         let scheduler = Scheduler(
             clock: SystemClock(),
-            intervalMinutes: settings.intervalMinutes
+            intervalMinutes: settings.intervalMinutes,
+            workHours: settings.workHours
         )
         let ollama = OllamaClient(
             baseURL: settings.ollamaBaseURL,
@@ -94,7 +95,8 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
 
         Log.info(
             "App started; onboarding=\(settings.onboardingStep.rawValue), "
-                + "interval=\(settings.intervalMinutes)m, model=\(settings.model)"
+                + "interval=\(settings.intervalMinutes)m, "
+                + "workHours=\(settings.workHours.promptDescription), model=\(settings.model)"
         )
 
         if settings.onboardingStep == .done {
@@ -297,8 +299,8 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         let wasOnboarding = onboarding != nil
         onboarding?.schedulerDidChange(to: state)
 
-        if old == .happy,
-            state == .idle,
+        if state == .idle,
+            (old == .happy || !scheduler.isActiveNow),
             !wasOnboarding,
             pendingReplyCount == 0,
             chat?.isReplying == false
@@ -433,15 +435,19 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
             messages: messages,
             response: outcome.traceResponse
         )
+        let decision = decisionAllowedForCheck(outcome.decision)
         handle(
-            decision: outcome.decision,
+            decision: decision,
+            conversationMessages: decision == outcome.decision
+                ? outcome.conversationMessages
+                : [],
             conversation: conversation,
             presentMessage: pendingReplyCount == 0
         )
         if let errorMessage = outcome.errorMessage, pendingReplyCount == 0 {
             showOllamaError(errorMessage)
         }
-        return outcome.decision
+        return decision
     }
 
     private func runReply(_ text: String) async {
@@ -472,6 +478,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         )
         handle(
             decision: outcome.decision,
+            conversationMessages: outcome.conversationMessages,
             conversation: conversation,
             presentMessage: false
         )
@@ -490,7 +497,8 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
             return DecisionOutcome(
                 decision: result.decision,
                 errorMessage: nil,
-                traceResponse: .success(result)
+                traceResponse: .success(result),
+                conversationMessages: result.conversationMessages
             )
         } catch let failure as OllamaDecisionFailure {
             let description = description(of: failure.error)
@@ -502,7 +510,8 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
                     error: description,
                     latency: failure.latency,
                     rawContent: failure.rawContent
-                )
+                ),
+                conversationMessages: []
             )
         } catch let error as OllamaError {
             let description = description(of: error)
@@ -514,7 +523,8 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
                     error: description,
                     latency: Date().timeIntervalSince(startedAt),
                     rawContent: nil
-                )
+                ),
+                conversationMessages: []
             )
         } catch {
             Log.error("Ollama decision failed: \(error.localizedDescription)")
@@ -525,7 +535,8 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
                     error: error.localizedDescription,
                     latency: Date().timeIntervalSince(startedAt),
                     rawContent: nil
-                )
+                ),
+                conversationMessages: []
             )
         }
     }
@@ -568,12 +579,17 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
 
     private func handle(
         decision: Decision,
+        conversationMessages: [OllamaMessage],
         conversation: Conversation,
         presentMessage: Bool = true
     ) {
-        conversation.appendAssistant(decision)
+        conversation.appendModelExchange(conversationMessages)
         if decision.tool == .save_user_preference {
             saveUserPreference(decision.text)
+        }
+        if decision.tool == .set_work_hours, let workHours = decision.workHours {
+            settings.workHours = workHours
+            Log.info("Saved work hours: \(workHours.promptDescription)")
         }
         Log.info(
             "Decision: tool=\(decision.tool.rawValue), "
@@ -627,6 +643,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
             window: window,
             lastUserMessage: conversation?.lastUserMessage,
             userPreferences: settings.userPreferences,
+            workHours: settings.workHours,
             now: now,
             reason: reason
         )
@@ -708,6 +725,14 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         Decision(tool: .set_idle, snoozeMinutes: nil, message: "")
     }
 
+    private func decisionAllowedForCheck(_ decision: Decision) -> Decision {
+        guard decision.tool != .set_work_hours else {
+            Log.warn("Ignored set_work_hours outside a direct user reply")
+            return idleDecision
+        }
+        return decision
+    }
+
     private func saveUserPreference(_ text: String?) {
         guard let text else {
             Log.warn("save_user_preference was called without text")
@@ -734,6 +759,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         let decision: Decision
         let errorMessage: String?
         let traceResponse: CheckTrace.Response
+        let conversationMessages: [OllamaMessage]
     }
 
     private func description(of reason: CheckReason) -> String {

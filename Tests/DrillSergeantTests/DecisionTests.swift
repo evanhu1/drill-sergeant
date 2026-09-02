@@ -2,89 +2,147 @@ import XCTest
 @testable import DrillSergeant
 
 final class DecisionTests: XCTestCase {
-    func testParsesCleanJSON() throws {
-        let decision = try Decision.parse(
-            #"{"tool":"set_idle","message":"Good."}"#
+    func testBuildsDecisionFromNativeToolCallAndAssistantText() throws {
+        let decision = try Decision(
+            toolCall: call(.set_angry),
+            message: "  Close it.  \n"
         )
+
         XCTAssertEqual(
             decision,
-            Decision(tool: .set_idle, snoozeMinutes: nil, message: "Good.")
+            Decision(tool: .set_angry, snoozeMinutes: nil, message: "Close it.")
         )
-    }
-
-    func testParsesFencedJSON() throws {
-        let decision = try Decision.parse(
-            """
-            ```json
-            {"tool":"set_angry","message":"Back to work."}
-            ```
-            """
-        )
-        XCTAssertEqual(decision.tool, .set_angry)
-    }
-
-    func testParsesFirstJSONObjectSurroundedByProse() throws {
-        let decision = try Decision.parse(
-            "Here is the call: {\"tool\":\"snooze\",\"snooze_minutes\":5,\"message\":\"Okay.\"} done"
-        )
-        XCTAssertEqual(decision.snoozeMinutes, 5)
     }
 
     func testMissingSnoozeMinutesDefaultsToTen() throws {
-        let decision = try Decision.parse(
-            #"{"tool":"snooze","message":"Ten minutes."}"#
-        )
+        let decision = try Decision(toolCall: call(.snooze), message: "Ten minutes.")
         XCTAssertEqual(decision.snoozeMinutes, 10)
     }
 
-    func testSnoozeMinutesClampsToRange() throws {
-        let high = try Decision.parse(
-            #"{"tool":"snooze","snooze_minutes":500,"message":"Fine."}"#
+    func testSnoozeMinutesClampToRange() throws {
+        let high = try Decision(
+            toolCall: call(.snooze, arguments: .init(minutes: 500)),
+            message: "Fine."
         )
-        let low = try Decision.parse(
-            #"{"tool":"snooze","snooze_minutes":0,"message":"Fine."}"#
+        let low = try Decision(
+            toolCall: call(.snooze, arguments: .init(minutes: 0)),
+            message: "Fine."
         )
+
         XCTAssertEqual(high.snoozeMinutes, 120)
         XCTAssertEqual(low.snoozeMinutes, 1)
     }
 
-    func testParserHandlesBracesInsideMessage() throws {
-        let decision = try Decision.parse(
-            #"prefix {"tool":"set_idle","message":"Use {this} safely"} suffix"#
-        )
-        XCTAssertEqual(decision.message, "Use {this} safely")
-    }
-
-    func testParsesSaveUserPreferenceWithText() throws {
-        let decision = try Decision.parse(
-            #"{"tool":"save_user_preference","text":"YouTube tutorials count as work.","message":"Got it."}"#
+    func testSaveUserPreferenceRequiresText() throws {
+        let decision = try Decision(
+            toolCall: call(
+                .save_user_preference,
+                arguments: .init(text: "YouTube tutorials count as work.")
+            ),
+            message: "Got it."
         )
 
-        XCTAssertEqual(decision.tool, .save_user_preference)
         XCTAssertEqual(decision.text, "YouTube tutorials count as work.")
-        XCTAssertEqual(decision.message, "Got it.")
+        XCTAssertThrowsError(
+            try Decision(toolCall: call(.save_user_preference), message: "Got it.")
+        )
     }
 
-    func testSaveUserPreferenceRequiresText() {
+    func testSetWorkHoursUsesOnlyFunctionArguments() throws {
+        let decision = try Decision(
+            toolCall: call(
+                .set_work_hours,
+                arguments: .init(
+                    days: [.monday, .tuesday, .wednesday, .thursday, .friday],
+                    startTime: "09:00",
+                    endTime: "17:00"
+                )
+            ),
+            message: "Weekdays, nine to five."
+        )
+
+        XCTAssertEqual(decision.workHours, .standard)
+        XCTAssertEqual(decision.message, "Weekdays, nine to five.")
+    }
+
+    func testSetWorkHoursRequiresCompleteValidArguments() {
         XCTAssertThrowsError(
-            try Decision.parse(
-                #"{"tool":"save_user_preference","message":"Got it."}"#
+            try Decision(
+                toolCall: call(
+                    .set_work_hours,
+                    arguments: .init(days: [.monday], startTime: "09:00")
+                ),
+                message: "Updated."
+            )
+        )
+        XCTAssertThrowsError(
+            try Decision(
+                toolCall: call(
+                    .set_work_hours,
+                    arguments: .init(
+                        days: [.monday],
+                        startTime: "9am",
+                        endTime: "17:00"
+                    )
+                ),
+                message: "Updated."
             )
         )
     }
 
-    func testSchemaDescribesPersistentPreferenceTool() throws {
-        let description = try XCTUnwrap(Decision.jsonSchema["description"] as? String)
-        let properties = try XCTUnwrap(
-            Decision.jsonSchema["properties"] as? [String: Any]
+    func testUnknownNativeToolIsRejected() {
+        let unknown = OllamaToolCall(
+            function: .init(name: "invented_tool", arguments: .init())
         )
-        let tool = try XCTUnwrap(properties["tool"] as? [String: Any])
-        let values = try XCTUnwrap(tool["enum"] as? [String])
-
-        XCTAssertTrue(description.contains("writes a user preference to memory forever"))
-        XCTAssertTrue(description.contains("Call this sparingly"))
-        XCTAssertTrue(description.contains("Negotiate with the user"))
-        XCTAssertTrue(values.contains("save_user_preference"))
-        XCTAssertNotNil(properties["text"])
+        XCTAssertThrowsError(try Decision(toolCall: unknown, message: ""))
     }
+
+    func testNativeToolDefinitionsHaveIndependentSchemasAndNoMessageArgument() throws {
+        XCTAssertEqual(Decision.toolDefinitions.count, 5)
+        var names: Set<String> = []
+
+        for definition in Decision.toolDefinitions {
+            let function = try XCTUnwrap(definition["function"] as? [String: Any])
+            names.insert(try XCTUnwrap(function["name"] as? String))
+            let parameters = try XCTUnwrap(function["parameters"] as? [String: Any])
+            let properties = try XCTUnwrap(parameters["properties"] as? [String: Any])
+            XCTAssertNil(properties["message"])
+        }
+
+        XCTAssertEqual(names, Set(Tool.allCasesForTests.map(\.rawValue)))
+        let workHours = try definition(named: Tool.set_work_hours.rawValue)
+        let parameters = try XCTUnwrap(workHours["parameters"] as? [String: Any])
+        XCTAssertEqual(
+            parameters["required"] as? [String],
+            ["days", "start_time", "end_time"]
+        )
+    }
+
+    private func call(
+        _ tool: Tool,
+        arguments: OllamaToolArguments = .init()
+    ) -> OllamaToolCall {
+        OllamaToolCall(function: .init(name: tool.rawValue, arguments: arguments))
+    }
+
+    private func definition(named name: String) throws -> [String: Any] {
+        for definition in Decision.toolDefinitions {
+            guard let function = definition["function"] as? [String: Any],
+                  function["name"] as? String == name else {
+                continue
+            }
+            return function
+        }
+        throw XCTSkip("Missing tool definition \(name)")
+    }
+}
+
+private extension Tool {
+    static let allCasesForTests: [Tool] = [
+        .set_idle,
+        .snooze,
+        .set_angry,
+        .save_user_preference,
+        .set_work_hours,
+    ]
 }

@@ -25,13 +25,8 @@ final class Conversation {
         trim()
     }
 
-    func appendAssistant(_ decision: Decision) {
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
-        let data = try? encoder.encode(decision)
-        let content = data.flatMap { String(data: $0, encoding: .utf8) }
-            ?? "{\"tool\":\"set_idle\",\"message\":\"\"}"
-        turns.append(OllamaMessage(role: "assistant", content: content, images: nil))
+    func appendModelExchange(_ messages: [OllamaMessage]) {
+        turns.append(contentsOf: messages)
         trim()
     }
 
@@ -48,6 +43,9 @@ final class Conversation {
     private func trim() {
         if turns.count > maxTurns {
             turns.removeFirst(turns.count - maxTurns)
+        }
+        while turns.first?.role == "tool" {
+            turns.removeFirst()
         }
     }
 }

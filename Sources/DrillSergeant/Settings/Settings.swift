@@ -13,6 +13,7 @@ final class Settings {
         static let directCapturePermissionRequestPending =
             "ds.directCapturePermissionRequestPending"
         static let userPreferences = "ds.userPreferences"
+        static let workHours = "ds.workHours"
         static let retiredSetting = String(
             decoding: [100, 115, 46, 103, 111, 97, 108],
             as: UTF8.self
@@ -108,6 +109,23 @@ final class Settings {
 
     var userPreferences: [String] {
         defaults.stringArray(forKey: Key.userPreferences) ?? []
+    }
+
+    var workHours: WorkHours {
+        get {
+            guard let data = defaults.data(forKey: Key.workHours),
+                  let hours = try? JSONDecoder().decode(WorkHours.self, from: data) else {
+                return .standard
+            }
+            return hours
+        }
+        set {
+            guard let data = try? JSONEncoder().encode(newValue) else {
+                Log.error("Could not encode work hours")
+                return
+            }
+            defaults.set(data, forKey: Key.workHours)
+        }
     }
 
     /// Saves a durable rule once. Returns false for blank or duplicate preferences.

@@ -21,60 +21,127 @@ final class OllamaClientTests: XCTestCase {
         XCTAssertTrue(hasModel)
     }
 
-    func testDecideSendsStructuredRequestAndParsesDecision() async throws {
+    func testDecideSendsNativeToolsAndUsesAssistantContent() async throws {
+        var requestCount = 0
         MockURLProtocol.handler = { request in
+            requestCount += 1
             XCTAssertEqual(request.url?.path, "/api/chat")
             XCTAssertEqual(request.httpMethod, "POST")
-            let body = try XCTUnwrap(Self.bodyData(from: request))
-            let object = try XCTUnwrap(
-                JSONSerialization.jsonObject(with: body) as? [String: Any]
-            )
+            let object = try Self.bodyObject(from: request)
             XCTAssertEqual(object["stream"] as? Bool, false)
-            XCTAssertEqual(object["think"] as? Bool, false)
+            XCTAssertEqual(object["think"] as? String, "low")
             XCTAssertEqual(object["keep_alive"] as? String, "30m")
-            XCTAssertNotNil(object["format"] as? [String: Any])
+            XCTAssertNil(object["format"])
+            XCTAssertEqual((object["tools"] as? [[String: Any]])?.count, 5)
             let options = try XCTUnwrap(object["options"] as? [String: Any])
-            XCTAssertEqual(options["num_predict"] as? Int, 200)
+            XCTAssertNil(options["num_predict"])
             return Self.response(
                 request: request,
-                body: #"{"message":{"content":"{\"tool\":\"set_angry\",\"message\":\"Close it.\"}"}}"#
+                body: #"{"message":{"role":"assistant","content":"Close it.","thinking":"private reasoning","tool_calls":[{"function":{"name":"set_angry","arguments":{}}}]},"eval_count":18,"done_reason":"stop"}"#
             )
         }
         let client = makeClient()
 
-        let decision = try await client.decide(
+        let result = try await client.decideWithMetadata(
             messages: [OllamaMessage(role: "user", content: "Check", images: ["abc"])]
         )
 
+        XCTAssertEqual(requestCount, 1)
         XCTAssertEqual(
-            decision,
+            result.decision,
             Decision(tool: .set_angry, snoozeMinutes: nil, message: "Close it.")
         )
+        XCTAssertEqual(result.sourceField, "content")
+        XCTAssertEqual(result.evalCount, 18)
+        XCTAssertEqual(result.doneReason, "stop")
+        XCTAssertEqual(result.conversationMessages.map(\.role), ["assistant", "tool"])
+        XCTAssertNil(result.conversationMessages.first?.thinking)
     }
 
-    func testDecideFallsBackToThinkingField() async throws {
+    func testEmptyToolCallContentGetsNormalAssistantFollowUp() async throws {
+        var requestCount = 0
         MockURLProtocol.handler = { request in
-            Self.response(
+            requestCount += 1
+            let object = try Self.bodyObject(from: request)
+            if requestCount == 1 {
+                XCTAssertNotNil(object["tools"])
+                return Self.response(
+                    request: request,
+                    body: #"{"message":{"role":"assistant","content":"","tool_calls":[{"id":"call-1","type":"function","function":{"index":0,"name":"set_work_hours","arguments":{"days":["monday","tuesday","wednesday","thursday","friday"],"start_time":"09:00","end_time":"17:00"}}}]},"eval_count":20,"done_reason":"stop"}"#
+                )
+            }
+
+            XCTAssertNil(object["tools"])
+            let messages = try XCTUnwrap(object["messages"] as? [[String: Any]])
+            XCTAssertEqual(messages.suffix(2).map { $0["role"] as? String }, ["assistant", "tool"])
+            XCTAssertNil(messages.first?["images"])
+            XCTAssertEqual(messages.last?["tool_name"] as? String, "set_work_hours")
+            XCTAssertEqual(messages.last?["tool_call_id"] as? String, "call-1")
+            let options = try XCTUnwrap(object["options"] as? [String: Any])
+            XCTAssertNil(options["num_predict"])
+            return Self.response(
                 request: request,
-                body: #"{"message":{"content":"","thinking":"{\"tool\":\"set_idle\",\"message\":\"Good.\"}"},"eval_count":18,"done_reason":"stop"}"#
+                body: #"{"message":{"role":"assistant","content":"Weekdays, nine to five.","thinking":"private reasoning"},"eval_count":10,"done_reason":"stop"}"#
             )
         }
         let client = makeClient()
 
-        let result = try await client.decideWithMetadata(messages: [])
+        let result = try await client.decideWithMetadata(
+            messages: [OllamaMessage(role: "user", content: "Set my hours", images: ["abc"])]
+        )
 
+        XCTAssertEqual(requestCount, 2)
+        XCTAssertEqual(result.decision.tool, .set_work_hours)
+        XCTAssertEqual(result.decision.workHours, .standard)
+        XCTAssertEqual(result.decision.message, "Weekdays, nine to five.")
+        XCTAssertEqual(result.sourceField, "followup.content")
+        XCTAssertEqual(result.evalCount, 30)
         XCTAssertEqual(
-            result.decision,
-            Decision(tool: .set_idle, snoozeMinutes: nil, message: "Good.")
+            result.conversationMessages.map(\.role),
+            ["assistant", "tool", "assistant"]
         )
-        XCTAssertEqual(result.sourceField, "thinking")
-        XCTAssertEqual(
-            result.rawContent,
-            #"{"tool":"set_idle","message":"Good."}"#
-        )
-        XCTAssertEqual(result.evalCount, 18)
-        XCTAssertEqual(result.doneReason, "stop")
-        XCTAssertGreaterThanOrEqual(result.latency, 0)
+        XCTAssertTrue(result.conversationMessages.allSatisfy { $0.thinking == nil })
+        XCTAssertTrue(result.rawContent.contains("--- follow-up response"))
+    }
+
+    func testEmptySetIdleContentStaysSilentWithoutFollowUp() async throws {
+        var requestCount = 0
+        MockURLProtocol.handler = { request in
+            requestCount += 1
+            return Self.response(
+                request: request,
+                body: #"{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"set_idle","arguments":{}}}]}}"#
+            )
+        }
+        let client = makeClient()
+
+        let decision = try await client.decide(messages: [])
+
+        XCTAssertEqual(requestCount, 1)
+        XCTAssertEqual(decision.tool, .set_idle)
+        XCTAssertEqual(decision.message, "")
+    }
+
+    func testMissingNativeToolCallIsRejected() async {
+        MockURLProtocol.handler = { request in
+            Self.response(
+                request: request,
+                body: #"{"message":{"role":"assistant","content":"Just text."}}"#
+            )
+        }
+        let client = makeClient()
+
+        do {
+            _ = try await client.decide(messages: [])
+            XCTFail("Expected badResponse")
+        } catch let error as OllamaError {
+            guard case let .badResponse(message) = error else {
+                return XCTFail("Expected badResponse, got \(error)")
+            }
+            XCTAssertTrue(message.contains("exactly one native tool call"))
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
     }
 
     func testIsReachableReturnsFalseForTransportError() async {
@@ -108,6 +175,13 @@ final class OllamaClientTests: XCTestCase {
             baseURL: URL(string: "http://ollama.test")!,
             model: model,
             session: session
+        )
+    }
+
+    private static func bodyObject(from request: URLRequest) throws -> [String: Any] {
+        let body = try XCTUnwrap(bodyData(from: request))
+        return try XCTUnwrap(
+            JSONSerialization.jsonObject(with: body) as? [String: Any]
         )
     }
 

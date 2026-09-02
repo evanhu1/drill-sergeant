@@ -38,10 +38,11 @@ final class CheckTraceTests: XCTestCase {
                 message: "Close it and get back to work."
             ),
             latency: 4.12,
-            sourceField: "thinking",
-            rawContent: #"{"tool":"set_angry","message":"Close it and get back to work."}"#,
+            sourceField: "content",
+            rawContent: #"{"message":{"role":"assistant","content":"Close it and get back to work.","tool_calls":[{"function":{"name":"set_angry","arguments":{}}}]}}"#,
             evalCount: 30,
-            doneReason: "stop"
+            doneReason: "stop",
+            conversationMessages: []
         )
 
         let successFolder = try trace.write(
@@ -54,11 +55,12 @@ final class CheckTraceTests: XCTestCase {
             encoding: .utf8
         )
         XCTAssertTrue(success.contains("latency: 4.12s"))
-        XCTAssertTrue(success.contains("field: message.thinking"))
+        XCTAssertTrue(success.contains("source: content"))
         XCTAssertTrue(success.contains("eval_count: 30"))
         XCTAssertTrue(success.contains("done_reason: stop"))
         XCTAssertTrue(success.contains("--- raw\n\(result.rawContent)"))
         XCTAssertTrue(success.contains("--- parsed\ntool: set_angry"))
+        XCTAssertTrue(success.contains("assistant_text: Close it and get back to work."))
 
         let failureFolder = try trace.write(
             request: makeRequest(reason: .reply, capture: nil),

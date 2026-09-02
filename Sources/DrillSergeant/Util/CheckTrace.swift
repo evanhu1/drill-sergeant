@@ -118,6 +118,10 @@ struct CheckTrace {
             lines.append("")
             lines.append("--- message \(offset + 1) · \(message.role)\(imageSuffix)")
             lines.append(message.content)
+            for call in message.toolCalls ?? [] {
+                lines.append("tool_call: \(call.function.name)")
+                lines.append("arguments: \(formatArguments(call.function.arguments))")
+            }
         }
         return lines.joined(separator: "\n") + "\n"
     }
@@ -128,7 +132,7 @@ struct CheckTrace {
         case let .success(result):
             return [
                 String(format: "latency: %.2fs", result.latency),
-                "field: message.\(result.sourceField)",
+                "source: \(result.sourceField)",
                 "eval_count: \(result.evalCount.map(String.init) ?? "none")",
                 "done_reason: \(result.doneReason ?? "none")",
                 "",
@@ -139,7 +143,8 @@ struct CheckTrace {
                 "tool: \(result.decision.tool.rawValue)",
                 "snooze_minutes: \(result.decision.snoozeMinutes.map(String.init) ?? "none")",
                 "text: \(result.decision.text ?? "none")",
-                "message: \(result.decision.message)",
+                "work_hours: \(result.decision.workHours?.promptDescription ?? "none")",
+                "assistant_text: \(result.decision.message)",
             ].joined(separator: "\n") + "\n"
 
         case let .failure(error, latency, rawContent):
@@ -169,6 +174,16 @@ struct CheckTrace {
             height: screenshot.height,
             byteCount: screenshot.jpegData.count
         )
+    }
+
+    private static func formatArguments(_ arguments: OllamaToolArguments) -> String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        guard let data = try? encoder.encode(arguments),
+              let text = String(data: data, encoding: .utf8) else {
+            return "{}"
+        }
+        return text
     }
 
     private func availableDirectory(for request: Request) throws -> URL {

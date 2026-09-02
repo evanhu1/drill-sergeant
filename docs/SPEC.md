@@ -1262,7 +1262,8 @@ Scheduling rules:
 Use Ollama's native function-calling protocol. Do not simulate a tool call with structured output,
 and do not put user-facing text inside tool arguments.
 
-`POST /api/chat` sends `tools` and omits `format`. The assistant response supplies
+`POST /api/chat` sends `tools`, sets `think` to `"low"`, omits `format`, and does not set a
+`num_predict` token cap. The assistant response supplies
 `message.tool_calls`; normal assistant prose remains in `message.content` and is the only source of
 bubble text.
 

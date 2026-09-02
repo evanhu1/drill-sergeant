@@ -3,7 +3,7 @@ import XCTest
 
 @MainActor
 final class SettingsTests: XCTestCase {
-    func testDefaultsAndPersistence() {
+    func testDefaultsAndPersistence() throws {
         let (defaults, suiteName) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let settings = Settings(defaults: defaults, environment: [:])
@@ -14,6 +14,7 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(settings.ollamaBaseURL.absoluteString, "http://127.0.0.1:11434")
         XCTAssertFalse(settings.screenPermissionRequestPending)
         XCTAssertEqual(settings.userPreferences, [])
+        XCTAssertEqual(settings.workHours, .standard)
         XCTAssertTrue(settings.tracingEnabled)
 
         settings.model = "custom:8b"
@@ -21,6 +22,11 @@ final class SettingsTests: XCTestCase {
         settings.onboardingStep = .test
         settings.ollamaBaseURL = URL(string: "http://localhost:9999")!
         settings.screenPermissionRequestPending = true
+        settings.workHours = try WorkHours(
+            days: [.tuesday, .thursday],
+            startTime: "10:30",
+            endTime: "18:00"
+        )
         XCTAssertTrue(settings.saveUserPreference("YouTube tutorials count as work."))
         XCTAssertFalse(settings.saveUserPreference("youtube tutorials count as work."))
         XCTAssertFalse(settings.saveUserPreference("   "))
@@ -32,6 +38,15 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(reloaded.ollamaBaseURL.absoluteString, "http://localhost:9999")
         XCTAssertTrue(reloaded.screenPermissionRequestPending)
         XCTAssertEqual(reloaded.userPreferences, ["YouTube tutorials count as work."])
+        XCTAssertEqual(
+            reloaded.workHours,
+            try WorkHours(
+                days: [.tuesday, .thursday],
+                startTime: "10:30",
+                endTime: "18:00"
+            )
+        )
+
     }
 
     func testEnvironmentOverridesDevelopmentValues() {
@@ -65,11 +80,17 @@ final class SettingsTests: XCTestCase {
         XCTAssertNil(defaults.object(forKey: retiredKey))
     }
 
-    func testResetEnvironmentClearsOnboarding() {
+    func testResetEnvironmentClearsOnboarding() throws {
         let (defaults, suiteName) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         defaults.set(OnboardingStep.done.rawValue, forKey: "ds.onboardingStep")
         defaults.set(["Slack counts as work."], forKey: "ds.userPreferences")
+        let customHours = try WorkHours(
+            days: [.saturday, .sunday],
+            startTime: "12:00",
+            endTime: "20:00"
+        )
+        defaults.set(try JSONEncoder().encode(customHours), forKey: "ds.workHours")
 
         let settings = Settings(
             defaults: defaults,
@@ -78,6 +99,7 @@ final class SettingsTests: XCTestCase {
 
         XCTAssertEqual(settings.onboardingStep, .welcome)
         XCTAssertEqual(settings.userPreferences, ["Slack counts as work."])
+        XCTAssertEqual(settings.workHours, customHours)
     }
 
     func testTraceEnvironmentCanDisableTracing() {

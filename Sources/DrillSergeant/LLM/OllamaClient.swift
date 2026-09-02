@@ -4,6 +4,49 @@ struct OllamaMessage: Codable, Equatable {
     var role: String
     var content: String
     var images: [String]?
+    var thinking: String?
+    var toolCalls: [OllamaToolCall]?
+    var toolName: String?
+    var toolCallID: String?
+
+    init(
+        role: String,
+        content: String,
+        images: [String]? = nil,
+        thinking: String? = nil,
+        toolCalls: [OllamaToolCall]? = nil,
+        toolName: String? = nil,
+        toolCallID: String? = nil
+    ) {
+        self.role = role
+        self.content = content
+        self.images = images
+        self.thinking = thinking
+        self.toolCalls = toolCalls
+        self.toolName = toolName
+        self.toolCallID = toolCallID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case role
+        case content
+        case images
+        case thinking
+        case toolCalls = "tool_calls"
+        case toolName = "tool_name"
+        case toolCallID = "tool_call_id"
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        role = try container.decode(String.self, forKey: .role)
+        content = try container.decodeIfPresent(String.self, forKey: .content) ?? ""
+        images = try container.decodeIfPresent([String].self, forKey: .images)
+        thinking = try container.decodeIfPresent(String.self, forKey: .thinking)
+        toolCalls = try container.decodeIfPresent([OllamaToolCall].self, forKey: .toolCalls)
+        toolName = try container.decodeIfPresent(String.self, forKey: .toolName)
+        toolCallID = try container.decodeIfPresent(String.self, forKey: .toolCallID)
+    }
 }
 
 enum OllamaError: Error, Equatable {
@@ -20,6 +63,7 @@ struct OllamaDecisionResult: Equatable {
     let rawContent: String
     let evalCount: Int?
     let doneReason: String?
+    let conversationMessages: [OllamaMessage]
 }
 
 struct OllamaDecisionFailure: Error, Equatable {
@@ -30,6 +74,28 @@ struct OllamaDecisionFailure: Error, Equatable {
 
 actor OllamaClient {
     var model: String
+
+    private struct ChatResponse: Decodable {
+        let message: OllamaMessage
+        let evalCount: Int?
+        let doneReason: String?
+
+        enum CodingKeys: String, CodingKey {
+            case message
+            case evalCount = "eval_count"
+            case doneReason = "done_reason"
+        }
+    }
+
+    private struct ChatExchange {
+        let response: ChatResponse
+        let rawResponse: String
+    }
+
+    private struct ChatRequestFailure: Error {
+        let error: OllamaError
+        let rawResponse: String?
+    }
 
     private let baseURL: URL
     private let session: URLSession
@@ -94,32 +160,163 @@ actor OllamaClient {
         }
     }
 
-    /// Requests a decision while preserving raw response details when parsing fails.
+    /// Runs one native tool call and, when needed, one assistant-text follow-up.
     func decideWithTraceMetadata(messages: [OllamaMessage]) async throws -> OllamaDecisionResult {
+        let startedAt = Date()
+        var rawResponses: [String] = []
+
+        do {
+            let first = try await chat(
+                messages: messages,
+                tools: Decision.toolDefinitions
+            )
+            rawResponses.append(first.rawResponse)
+
+            let calls = first.response.message.toolCalls ?? []
+            guard calls.count == 1, let call = calls.first else {
+                throw ChatRequestFailure(
+                    error: .badResponse("Expected exactly one native tool call, got \(calls.count)"),
+                    rawResponse: first.rawResponse
+                )
+            }
+
+            var decision: Decision
+            do {
+                decision = try Decision(
+                    toolCall: call,
+                    message: first.response.message.content
+                )
+            } catch {
+                throw ChatRequestFailure(
+                    error: .badResponse("Invalid native tool call: \(error.localizedDescription)"),
+                    rawResponse: first.rawResponse
+                )
+            }
+
+            var assistantToolCall = first.response.message
+            assistantToolCall.thinking = nil
+            let needsFollowUp = decision.tool != .set_idle && decision.message.isEmpty
+            let toolResult = OllamaMessage(
+                role: "tool",
+                content: needsFollowUp
+                    ? "Accepted. Respond now with only the short user-facing message."
+                    : "Accepted.",
+                toolName: call.function.name,
+                toolCallID: call.id
+            )
+            var conversationMessages = [assistantToolCall, toolResult]
+            var sourceField = decision.message.isEmpty ? "tool_calls" : "content"
+            var evalCount = first.response.evalCount
+            var doneReason = first.response.doneReason
+
+            if needsFollowUp {
+                let historyWithoutImages = messages.map { message in
+                    var copy = message
+                    copy.images = nil
+                    return copy
+                }
+                let followUp = try await chat(
+                    messages: historyWithoutImages + conversationMessages,
+                    tools: nil
+                )
+                rawResponses.append(followUp.rawResponse)
+                let content = followUp.response.message.content
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                guard !content.isEmpty else {
+                    throw ChatRequestFailure(
+                        error: .badResponse("No assistant text after native tool result"),
+                        rawResponse: followUp.rawResponse
+                    )
+                }
+                decision = try Decision(toolCall: call, message: content)
+                var assistantText = followUp.response.message
+                assistantText.thinking = nil
+                conversationMessages.append(assistantText)
+                sourceField = "followup.content"
+                evalCount = combined(first.response.evalCount, followUp.response.evalCount)
+                doneReason = followUp.response.doneReason ?? first.response.doneReason
+            }
+
+            let elapsed = Date().timeIntervalSince(startedAt)
+            Log.info(
+                "Ollama decision source: message.\(sourceField), "
+                    + "tool=\(call.function.name), "
+                    + "eval_count=\(evalCount.map(String.init) ?? "none"), "
+                    + "done_reason=\(doneReason ?? "none")"
+            )
+            return OllamaDecisionResult(
+                decision: decision,
+                latency: elapsed,
+                sourceField: sourceField,
+                rawContent: rawResponses.joined(separator: "\n\n--- follow-up response\n"),
+                evalCount: evalCount,
+                doneReason: doneReason,
+                conversationMessages: conversationMessages
+            )
+        } catch let failure as ChatRequestFailure {
+            if let rawResponse = failure.rawResponse,
+               !rawResponses.contains(rawResponse) {
+                rawResponses.append(rawResponse)
+            }
+            throw OllamaDecisionFailure(
+                error: failure.error,
+                latency: Date().timeIntervalSince(startedAt),
+                rawContent: rawResponses.isEmpty
+                    ? failure.rawResponse
+                    : rawResponses.joined(separator: "\n\n--- follow-up response\n")
+            )
+        } catch let error as OllamaError {
+            throw OllamaDecisionFailure(
+                error: error,
+                latency: Date().timeIntervalSince(startedAt),
+                rawContent: rawResponses.isEmpty
+                    ? nil
+                    : rawResponses.joined(separator: "\n\n--- follow-up response\n")
+            )
+        } catch {
+            throw OllamaDecisionFailure(
+                error: .badResponse(error.localizedDescription),
+                latency: Date().timeIntervalSince(startedAt),
+                rawContent: rawResponses.isEmpty
+                    ? nil
+                    : rawResponses.joined(separator: "\n\n--- follow-up response\n")
+            )
+        }
+    }
+
+    private func chat(
+        messages: [OllamaMessage],
+        tools: [[String: Any]]?
+    ) async throws -> ChatExchange {
         let encodedMessages = try JSONEncoder().encode(messages)
         guard let messageObjects = try JSONSerialization.jsonObject(
             with: encodedMessages
         ) as? [[String: Any]] else {
             throw OllamaError.badResponse("Could not encode chat messages")
         }
-        let payload: [String: Any] = [
+
+        var payload: [String: Any] = [
             "model": model,
             "messages": messageObjects,
             "stream": false,
-            "think": false,
-            "format": Decision.jsonSchema,
+            "think": "low",
             "options": [
                 "temperature": 0.2,
                 "num_ctx": 8192,
-                "num_predict": 200,
             ],
             "keep_alive": "30m",
         ]
+        if let tools {
+            payload["tools"] = tools
+        }
+
         let body: Data
         do {
             body = try JSONSerialization.data(withJSONObject: payload)
         } catch {
-            throw OllamaError.badResponse("Could not encode request: \(error.localizedDescription)")
+            throw OllamaError.badResponse(
+                "Could not encode request: \(error.localizedDescription)"
+            )
         }
 
         var request = URLRequest(url: endpoint("api/chat"), timeoutInterval: 120)
@@ -127,22 +324,23 @@ actor OllamaClient {
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = body
 
-        let startedAt = Date()
+        let requestStartedAt = Date()
         Log.info("Ollama request: \(body.count) bytes")
         let data: Data
         let response: HTTPURLResponse
         do {
             (data, response) = try await perform(request)
         } catch let error as OllamaError {
-            throw OllamaDecisionFailure(
-                error: error,
-                latency: Date().timeIntervalSince(startedAt),
-                rawContent: nil
-            )
+            throw ChatRequestFailure(error: error, rawResponse: nil)
         }
-        let elapsed = Date().timeIntervalSince(startedAt)
-        Log.info(String(format: "Ollama response: %d bytes in %.2fs", data.count, elapsed))
-        let rawResponse = String(data: data, encoding: .utf8)
+        Log.info(
+            String(
+                format: "Ollama response: %d bytes in %.2fs",
+                data.count,
+                Date().timeIntervalSince(requestStartedAt)
+            )
+        )
+        let rawResponse = String(data: data, encoding: .utf8) ?? ""
 
         guard (200..<300).contains(response.statusCode) else {
             let error: OllamaError
@@ -151,80 +349,21 @@ actor OllamaClient {
             } else {
                 error = .http(response.statusCode)
             }
-            throw OllamaDecisionFailure(
-                error: error,
-                latency: elapsed,
-                rawContent: rawResponse
-            )
+            throw ChatRequestFailure(error: error, rawResponse: rawResponse)
         }
 
-        struct ChatResponse: Decodable {
-            struct Message: Decodable {
-                let content: String
-                let thinking: String?
-            }
-
-            let message: Message
-            let evalCount: Int?
-            let doneReason: String?
-
-            enum CodingKeys: String, CodingKey {
-                case message
-                case evalCount = "eval_count"
-                case doneReason = "done_reason"
-            }
-        }
         guard let chat = try? JSONDecoder().decode(ChatResponse.self, from: data) else {
-            throw OllamaDecisionFailure(
+            throw ChatRequestFailure(
                 error: .badResponse("Invalid response from /api/chat"),
-                latency: elapsed,
-                rawContent: rawResponse
+                rawResponse: rawResponse
             )
         }
+        return ChatExchange(response: chat, rawResponse: rawResponse)
+    }
 
-        let decisionText: String
-        let responseField: String
-        if chat.message.content.contains("{") {
-            decisionText = chat.message.content
-            responseField = "content"
-        } else if let thinking = chat.message.thinking {
-            decisionText = thinking
-            responseField = "thinking"
-        } else {
-            throw OllamaDecisionFailure(
-                error: .badResponse("No decision in message.content or message.thinking"),
-                latency: elapsed,
-                rawContent: rawResponse
-            )
-        }
-
-        var details = ["field=message.\(responseField)"]
-        if let evalCount = chat.evalCount {
-            details.append("eval_count=\(evalCount)")
-        }
-        if let doneReason = chat.doneReason {
-            details.append("done_reason=\(doneReason)")
-        }
-        Log.info("Ollama decision source: \(details.joined(separator: ", "))")
-
-        do {
-            return OllamaDecisionResult(
-                decision: try Decision.parse(decisionText),
-                latency: elapsed,
-                sourceField: responseField,
-                rawContent: decisionText,
-                evalCount: chat.evalCount,
-                doneReason: chat.doneReason
-            )
-        } catch {
-            throw OllamaDecisionFailure(
-                error: .badResponse(
-                    "Invalid decision in message.\(responseField): \(error.localizedDescription)"
-                ),
-                latency: elapsed,
-                rawContent: decisionText
-            )
-        }
+    private func combined(_ first: Int?, _ second: Int?) -> Int? {
+        if first == nil, second == nil { return nil }
+        return (first ?? 0) + (second ?? 0)
     }
 
     private func endpoint(_ path: String) -> URL {

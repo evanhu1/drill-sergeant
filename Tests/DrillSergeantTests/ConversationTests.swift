@@ -6,30 +6,27 @@ final class ConversationTests: XCTestCase {
     func testImageIsKeptOnlyOnMostRecentUserTurn() {
         let conversation = Conversation()
         conversation.appendUser("first", image: "image-one")
-        conversation.appendAssistant(
-            Decision(tool: .set_idle, snoozeMinutes: nil, message: "")
-        )
+        conversation.appendModelExchange(nativeExchange())
         conversation.appendUser("second", image: "image-two")
 
         XCTAssertNil(conversation.turns[0].images)
         XCTAssertNil(conversation.turns[1].images)
-        XCTAssertEqual(conversation.turns[2].images, ["image-two"])
+        XCTAssertNil(conversation.turns[2].images)
+        XCTAssertEqual(conversation.turns[3].images, ["image-two"])
     }
 
     func testMaxTurnsTrimsOldestMessages() {
         let conversation = Conversation(maxTurns: 3)
         conversation.appendUser("one", image: nil)
-        conversation.appendAssistant(
-            Decision(tool: .set_idle, snoozeMinutes: nil, message: "one")
-        )
+        conversation.appendModelExchange(nativeExchange(message: "one"))
         conversation.appendUser("two", image: nil)
-        conversation.appendAssistant(
-            Decision(tool: .set_idle, snoozeMinutes: nil, message: "two")
-        )
+        conversation.appendModelExchange(nativeExchange(message: "two"))
 
         XCTAssertEqual(conversation.turns.count, 3)
-        XCTAssertEqual(conversation.turns.first?.role, "assistant")
-        XCTAssertEqual(conversation.turns.last?.content.contains("two"), true)
+        XCTAssertNotEqual(conversation.turns.first?.role, "tool")
+        XCTAssertTrue(conversation.turns.contains { message in
+            message.role == "assistant" && message.content == "two"
+        })
     }
 
     func testHumanReplyAndReset() {
@@ -51,5 +48,27 @@ final class ConversationTests: XCTestCase {
         conversation.reset()
         XCTAssertNil(conversation.lastUserMessage)
         XCTAssertTrue(conversation.turns.isEmpty)
+    }
+
+    func testTrimmingNeverLeavesAnOrphanedToolResult() {
+        let conversation = Conversation(maxTurns: 1)
+
+        conversation.appendModelExchange(nativeExchange())
+
+        XCTAssertNotEqual(conversation.turns.first?.role, "tool")
+    }
+
+    private func nativeExchange(message: String = "") -> [OllamaMessage] {
+        let call = OllamaToolCall(
+            function: .init(name: Tool.set_idle.rawValue, arguments: .init())
+        )
+        return [
+            OllamaMessage(
+                role: "assistant",
+                content: message,
+                toolCalls: [call]
+            ),
+            OllamaMessage(role: "tool", content: "Accepted.", toolName: Tool.set_idle.rawValue),
+        ]
     }
 }
