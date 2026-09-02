@@ -28,6 +28,11 @@ final class Scheduler {
     private(set) var previousState: CompanionState = .idle
     private(set) var stateChangedAt: Date
     private(set) var nextCheckAt: Date?
+    private(set) var workHours: WorkHours
+
+    var isActiveNow: Bool {
+        isWorkHoursOverrideActive || workHours.contains(clock.now, calendar: calendar)
+    }
 
     var intervalMinutes: Int {
         didSet {
@@ -41,6 +46,7 @@ final class Scheduler {
     }
 
     private let clock: Clock
+    private let calendar: Calendar
     private let preRollSeconds: TimeInterval
     private let angryPollSeconds: TimeInterval
     private let happySeconds: TimeInterval
@@ -49,16 +55,21 @@ final class Scheduler {
     private var stateToken: CancelToken?
     private var isStarted = false
     private var isCheckInFlight = false
+    private var isWorkHoursOverrideActive = false
 
     init(
         clock: Clock,
         intervalMinutes: Int = 10,
+        workHours: WorkHours = .standard,
+        calendar: Calendar = .current,
         preRollSeconds: TimeInterval = 30,
         angryPollSeconds: TimeInterval = 10,
-        happySeconds: TimeInterval = 30
+        happySeconds: TimeInterval = 5
     ) {
         self.clock = clock
         self.intervalMinutes = max(1, intervalMinutes)
+        self.workHours = workHours
+        self.calendar = calendar
         self.preRollSeconds = max(0, preRollSeconds)
         self.angryPollSeconds = max(0, angryPollSeconds)
         self.happySeconds = max(0, happySeconds)
@@ -68,6 +79,7 @@ final class Scheduler {
     func start() {
         isStarted = true
         isCheckInFlight = false
+        isWorkHoursOverrideActive = false
         cancelAllTimers()
         transition(to: .idle)
         scheduleNextCheck(minutes: intervalMinutes)
@@ -76,6 +88,7 @@ final class Scheduler {
     func stop() {
         isStarted = false
         isCheckInFlight = false
+        isWorkHoursOverrideActive = false
         cancelAllTimers()
         nextCheckAt = nil
         transition(to: .idle)
@@ -84,6 +97,7 @@ final class Scheduler {
     func checkNow() {
         guard !isCheckInFlight else { return }
         isStarted = true
+        isWorkHoursOverrideActive = true
         cancelAllTimers()
         nextCheckAt = nil
         transition(to: .watching)
@@ -104,6 +118,7 @@ final class Scheduler {
     func enterWatching() {
         isStarted = true
         isCheckInFlight = false
+        isWorkHoursOverrideActive = true
         cancelAllTimers()
         nextCheckAt = nil
         transition(to: .watching)
@@ -118,16 +133,19 @@ final class Scheduler {
 
         switch state {
         case .idle:
+            isWorkHoursOverrideActive = false
             apply(
                 Decision(tool: .set_idle, snoozeMinutes: nil, message: "")
             )
         case .watching:
             enterWatching()
         case .angry:
+            isWorkHoursOverrideActive = true
             apply(
                 Decision(tool: .set_angry, snoozeMinutes: nil, message: "")
             )
         case .happy:
+            isWorkHoursOverrideActive = false
             enterHappy(nextCheckMinutes: intervalMinutes)
         }
     }
@@ -137,17 +155,30 @@ final class Scheduler {
         case .set_angry:
             scheduleAngryPoll()
         case .set_idle:
+            isWorkHoursOverrideActive = false
             enterHappy(nextCheckMinutes: intervalMinutes)
         case .snooze:
+            isWorkHoursOverrideActive = false
             enterHappy(nextCheckMinutes: decision.snoozeMinutes ?? 10)
         case .save_user_preference:
             scheduleAngryPoll()
+        case .set_work_hours:
+            isWorkHoursOverrideActive = false
+            if let workHours = decision.workHours {
+                self.workHours = workHours
+            }
+            if workHours.contains(clock.now, calendar: calendar) {
+                scheduleAngryPoll()
+            } else {
+                suspendUntilWorkHours()
+            }
         }
     }
 
     private func applyFromNonAngry(_ decision: Decision) {
         switch decision.tool {
         case .set_idle:
+            isWorkHoursOverrideActive = false
             transition(to: .idle)
             scheduleNextCheck(minutes: intervalMinutes)
         case .set_angry:
@@ -156,9 +187,18 @@ final class Scheduler {
             transition(to: .angry)
             scheduleAngryPoll()
         case .snooze:
+            isWorkHoursOverrideActive = false
             transition(to: .idle)
             scheduleNextCheck(minutes: decision.snoozeMinutes ?? 10)
         case .save_user_preference:
+            isWorkHoursOverrideActive = false
+            transition(to: .idle)
+            scheduleNextCheck(minutes: intervalMinutes)
+        case .set_work_hours:
+            isWorkHoursOverrideActive = false
+            if let workHours = decision.workHours {
+                self.workHours = workHours
+            }
             transition(to: .idle)
             scheduleNextCheck(minutes: intervalMinutes)
         }
@@ -178,10 +218,33 @@ final class Scheduler {
         preRollToken?.cancel()
         checkToken?.cancel()
 
-        let delay = TimeInterval(max(1, minutes) * 60)
-        nextCheckAt = clock.now.addingTimeInterval(delay)
+        let requestedDelay = TimeInterval(max(1, minutes) * 60)
+        let requestedDate = clock.now.addingTimeInterval(requestedDelay)
+        let checkDate: Date
+        let startsNewWorkWindow: Bool
+        if workHours.contains(requestedDate, calendar: calendar) {
+            checkDate = requestedDate
+            startsNewWorkWindow = false
+        } else if let nextStart = workHours.nextStart(
+            onOrAfter: requestedDate,
+            calendar: calendar
+        ) {
+            checkDate = nextStart
+            startsNewWorkWindow = true
+        } else {
+            nextCheckAt = nil
+            Log.error("Could not find the next work-hours window")
+            return
+        }
 
-        if delay > preRollSeconds, preRollSeconds > 0 {
+        let delay = max(0, checkDate.timeIntervalSince(clock.now))
+        nextCheckAt = checkDate
+
+        let preRollDate = checkDate.addingTimeInterval(-preRollSeconds)
+        if !startsNewWorkWindow,
+           delay > preRollSeconds,
+           preRollSeconds > 0,
+           workHours.contains(preRollDate, calendar: calendar) {
             preRollToken = clock.after(delay - preRollSeconds) { [weak self] in
                 guard let self, !self.isCheckInFlight else { return }
                 self.transition(to: .watching)
@@ -192,6 +255,10 @@ final class Scheduler {
 
         checkToken = clock.after(delay) { [weak self] in
             guard let self, !self.isCheckInFlight else { return }
+            guard self.workHours.contains(self.clock.now, calendar: self.calendar) else {
+                self.scheduleNextCheck(minutes: self.intervalMinutes)
+                return
+            }
             self.preRollToken?.cancel()
             self.preRollToken = nil
             self.checkToken = nil
@@ -203,10 +270,37 @@ final class Scheduler {
 
     private func scheduleAngryPoll() {
         stateToken?.cancel()
-        stateToken = clock.after(angryPollSeconds) { [weak self] in
+        guard isActiveNow else {
+            suspendUntilWorkHours()
+            return
+        }
+
+        var delay = angryPollSeconds
+        var endsWorkWindow = false
+        if !isWorkHoursOverrideActive,
+           let end = workHours.intervalEnd(containing: clock.now, calendar: calendar) {
+            let untilEnd = max(0, end.timeIntervalSince(clock.now))
+            if untilEnd <= delay {
+                delay = untilEnd
+                endsWorkWindow = true
+            }
+        }
+
+        stateToken = clock.after(delay) { [weak self] in
             guard let self, self.state == .angry else { return }
+            if endsWorkWindow {
+                self.suspendUntilWorkHours()
+                return
+            }
             self.requestCheck(reason: .angryPoll)
         }
+    }
+
+    private func suspendUntilWorkHours() {
+        isWorkHoursOverrideActive = false
+        cancelAllTimers()
+        transition(to: .idle)
+        scheduleNextCheck(minutes: intervalMinutes)
     }
 
     private func requestCheck(reason: CheckReason) {

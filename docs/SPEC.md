@@ -62,7 +62,7 @@ enum CompanionState: String, Codable, Equatable {
     case idle      // eyes relaxed, occasional blink
     case watching  // eyes follow the cursor; pre-roll before a check and during processing
     case angry     // caught off task; eyes follow cursor with angry brows; polls every 10s
-    case happy     // shown for 30s after leaving angry; then idle
+    case happy     // shown for 5s after leaving angry; then idle
 }
 ```
 
@@ -77,7 +77,7 @@ Transitions (Scheduler drives these):
 | angry | 10s poll, decision `set_angry` | angry (stay) |
 | angry | 10s poll or reply, decision `set_idle` | happy |
 | angry | decision `snooze(n)` | happy (then idle, next check in `n` minutes) |
-| happy | 30s elapsed | idle |
+| happy | 5s elapsed | idle |
 | any | user reply produces a decision | same rules as the row for the current state (idle/happy treated like watching) |
 | any | "Check now" menu item | watching (no pre-roll), immediate capture |
 
@@ -116,7 +116,7 @@ enum CheckReason { case scheduled, angryPoll, manual, onboarding }
 @MainActor
 final class Scheduler {
     init(clock: Clock, intervalMinutes: Int = 10, preRollSeconds: TimeInterval = 30,
-         angryPollSeconds: TimeInterval = 10, happySeconds: TimeInterval = 30)
+         angryPollSeconds: TimeInterval = 10, happySeconds: TimeInterval = 5)
     weak var delegate: SchedulerDelegate?
     private(set) var state: CompanionState          // starts .idle
     private(set) var previousState: CompanionState  // starts .idle
@@ -1130,7 +1130,7 @@ than letting the first accountability check trigger an unexplained system dialog
 After the initial Screen Recording permission works, persist `.directCapturePermission` and show:
 
 ```
-One more permission: I need direct screen access so I can check your active window automatically without making you pick it every time. I take screenshots only — never audio — and keep them on this Mac. Click this bubble to grant it.
+One more permission: I need direct screen access so I can check your active window automatically without making you pick it every time. Click this bubble to grant it.
 ```
 
 Nothing is requested until the user clicks the bubble. On click, persist
@@ -1237,7 +1237,8 @@ to change when monitoring is active. List every active day using lowercase weekd
 24-hour HH:mm times. Always send the full schedule, repeating unchanged values.
 ```
 
-Call it only in direct response to a user's schedule request, never from a screenshot check.
+Call it only in direct response to a user's schedule request, never from a screenshot check. The
+coordinator ignores the action if a screenshot check emits it anyway.
 `CheckContext` gains `let workHours: WorkHours`, and both check and reply prompts include
 `Current work hours: Monday-Friday, 09:00-17:00 local time` so partial-change requests are safe.
 
@@ -1255,3 +1256,78 @@ Scheduling rules:
   explicit user action should still work at night.
 - Applying `set_work_hours` persists the setting immediately. If the new schedule excludes the
   current time, automatic monitoring returns to idle and waits for the next window.
+
+## 30. Native Ollama tool calls (replaces 4.1 and amends 4.2, 4.3, 17.1, 19, 24, 29)
+
+Use Ollama's native function-calling protocol. Do not simulate a tool call with structured output,
+and do not put user-facing text inside tool arguments.
+
+`POST /api/chat` sends `tools` and omits `format`. The assistant response supplies
+`message.tool_calls`; normal assistant prose remains in `message.content` and is the only source of
+bubble text.
+
+Expose five function tools:
+
+```text
+set_idle()                         // working or plausibly working
+set_angry()                        // clearly slacking
+snooze(minutes: Int)               // clamp 1...120; default 10 if omitted
+save_user_preference(text: String)
+set_work_hours(days: [Weekday], start_time: String, end_time: String)
+```
+
+Each function has its own JSON Schema parameters object. Zero-argument tools use an empty
+properties object. There is no `message` parameter on any tool.
+
+```swift
+struct OllamaToolArguments: Codable, Equatable {
+    let minutes: Int?
+    let text: String?
+    let days: [Weekday]?
+    let startTime: String?
+    let endTime: String?
+}
+
+struct OllamaToolCall: Codable, Equatable {
+    struct Function: Codable, Equatable {
+        let index: Int?
+        let name: String
+        let arguments: OllamaToolArguments
+    }
+    let id: String?
+    let type: String?
+    let function: Function
+}
+
+struct OllamaMessage: Codable, Equatable {
+    var role: String
+    var content: String
+    var images: [String]?
+    var thinking: String?
+    var toolCalls: [OllamaToolCall]?
+    var toolName: String?
+    var toolCallID: String?
+}
+```
+
+Exactly one tool call is required for every decision. Unknown tools, multiple calls, missing calls,
+and invalid arguments are bad responses. `Decision` remains the validated internal action value;
+its `message` is populated from assistant content, never from function arguments.
+
+When the tool-call response has non-empty `message.content`, use it directly. When content is empty
+for `set_idle`, silence is intentional. When content is empty for any other tool, append the exact
+assistant tool-call message and a `role: "tool"` success result, then make one follow-up `/api/chat`
+request without `tools`; its `message.content` becomes the user-facing message. This is the standard
+native tool-result loop while avoiding a second generation for the common silent `set_idle` case.
+
+Store successful native exchanges in `Conversation`: assistant tool call, tool result, and optional
+follow-up assistant text. Strip old images as before and never retain an orphaned leading tool
+result after trimming.
+
+The system prompt says to call exactly one provided tool. It no longer says to output JSON. It also
+says user-facing words belong in assistant text, and that after a tool result the model should
+return only the short final message without another tool call.
+
+Check traces show assistant content and the native function name/arguments separately. Failed
+traces preserve the raw HTTP response. The developer toolbar reports `tool_calls` or
+`followup.content` as the decision source.
