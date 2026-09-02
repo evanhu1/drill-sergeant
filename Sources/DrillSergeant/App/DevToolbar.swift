@@ -8,7 +8,7 @@ final class DevToolbar: NSPanel {
         let hostingView = NSHostingView(rootView: content)
 
         super.init(
-            contentRect: CGRect(x: 0, y: 0, width: 360, height: 650),
+            contentRect: CGRect(x: 0, y: 0, width: 360, height: 860),
             styleMask: [.utilityWindow, .titled, .closable],
             backing: .buffered,
             defer: false
@@ -18,14 +18,17 @@ final class DevToolbar: NSPanel {
         level = .floating
         isFloatingPanel = true
         isReleasedWhenClosed = false
+        hidesOnDeactivate = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         contentMinSize = CGSize(width: 360, height: 500)
-        contentMaxSize = CGSize(width: 360, height: 900)
+        contentMaxSize = CGSize(width: 360, height: 1200)
         contentView = hostingView
         center()
     }
 
     func show() {
-        makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+        orderFrontRegardless()
+        makeKey()
     }
 }

@@ -88,6 +88,8 @@ struct DevToolbarView: View {
             }
         }
         .formStyle(.grouped)
+        .formStyle(.grouped)
+        .scrollContentBackground(.hidden)
         .frame(width: 360)
         .task {
             while !Task.isCancelled {
