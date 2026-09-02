@@ -29,7 +29,7 @@ final class OllamaClientTests: XCTestCase {
             XCTAssertEqual(request.httpMethod, "POST")
             let object = try Self.bodyObject(from: request)
             XCTAssertEqual(object["stream"] as? Bool, false)
-            XCTAssertEqual(object["think"] as? String, "low")
+            XCTAssertNil(object["think"])
             XCTAssertEqual(object["keep_alive"] as? String, "30m")
             XCTAssertNil(object["format"])
             XCTAssertEqual((object["tools"] as? [[String: Any]])?.count, 5)

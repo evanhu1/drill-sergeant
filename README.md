@@ -31,7 +31,7 @@ Nothing leaves your Mac. Screenshots and prompts are processed by Ollama on your
 
 Drill Sergeant opens at login once you finish setup.
 
-On Macs with 8 GB of memory, the app keeps the same `qwen3-vl:8b` model but automatically uses a
+On Macs with 8 GB of memory, the app keeps the same `qwen3-vl:8b-instruct` model but automatically uses a
 4K context, 960-pixel screenshots, four-message history, and unloads the model after each complete
 decision. The installer also enables Ollama Flash Attention, Q4 KV-cache quantization, one parallel
 request, and one loaded model. If Ollama was already running during installation, restart it once
@@ -52,6 +52,20 @@ swift test
 
 Use `Scripts/run.sh --reset` to restart onboarding. Development overrides are `DS_MODEL`,
 `DS_INTERVAL_MINUTES`, `DS_OLLAMA_URL`, and `DS_RESET_ONBOARDING=1`.
+
+To measure how long a check takes, build the app and run it with `--benchmark [runs]`. It times
+the real pipeline — capture, model call, output processing — and reports the prompt and output
+token counts behind the model call. `--dump-payload` prints the exact system prompt and tool
+schema, for experimenting against the real request outside the app.
+
+```bash
+Scripts/bundle.sh && "build/Drill Sergeant.app/Contents/MacOS/DrillSergeant" --benchmark 6
+```
+
+The model must be an `-instruct` build. The plain `qwen3-vl:8b` tag is the *thinking* build: it
+spends hundreds of output tokens per check on reasoning nobody reads, which dominated latency and
+produced 30-second checks. Ollama rejects a `think` option outright on instruct builds, so the app
+sends none.
 
 `install.sh` downloads the app from the latest GitHub release, which
 `.github/workflows/release.yml` publishes on every push to `main`. Set `DS_FROM_SOURCE=1` to build
@@ -76,5 +90,5 @@ Quit Drill Sergeant, then remove the app and its model:
 
 ```bash
 rm -rf ~/"Applications/Drill Sergeant.app"
-ollama rm qwen3-vl:8b
+ollama rm qwen3-vl:8b-instruct
 ```

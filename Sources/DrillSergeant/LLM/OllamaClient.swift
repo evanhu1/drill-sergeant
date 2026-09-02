@@ -56,6 +56,25 @@ enum OllamaError: Error, Equatable {
     case http(Int)
 }
 
+/// What Ollama reports about the work it did, summed over every call in one decision.
+struct OllamaTimings: Equatable {
+    var promptTokens = 0
+    var promptSeconds: TimeInterval = 0
+    var outputTokens = 0
+    var outputSeconds: TimeInterval = 0
+    var loadSeconds: TimeInterval = 0
+
+    static func + (lhs: Self, rhs: Self) -> Self {
+        Self(
+            promptTokens: lhs.promptTokens + rhs.promptTokens,
+            promptSeconds: lhs.promptSeconds + rhs.promptSeconds,
+            outputTokens: lhs.outputTokens + rhs.outputTokens,
+            outputSeconds: lhs.outputSeconds + rhs.outputSeconds,
+            loadSeconds: lhs.loadSeconds + rhs.loadSeconds
+        )
+    }
+}
+
 struct OllamaDecisionResult: Equatable {
     let decision: Decision
     let latency: TimeInterval
@@ -64,6 +83,7 @@ struct OllamaDecisionResult: Equatable {
     let evalCount: Int?
     let doneReason: String?
     let conversationMessages: [OllamaMessage]
+    var timings = OllamaTimings()
 }
 
 struct OllamaDecisionFailure: Error, Equatable {
@@ -91,11 +111,29 @@ actor OllamaClient {
         let message: OllamaMessage
         let evalCount: Int?
         let doneReason: String?
+        let promptEvalCount: Int?
+        let promptEvalDuration: Int?
+        let evalDuration: Int?
+        let loadDuration: Int?
 
         enum CodingKeys: String, CodingKey {
             case message
             case evalCount = "eval_count"
             case doneReason = "done_reason"
+            case promptEvalCount = "prompt_eval_count"
+            case promptEvalDuration = "prompt_eval_duration"
+            case evalDuration = "eval_duration"
+            case loadDuration = "load_duration"
+        }
+
+        var timings: OllamaTimings {
+            OllamaTimings(
+                promptTokens: promptEvalCount ?? 0,
+                promptSeconds: Double(promptEvalDuration ?? 0) / 1_000_000_000,
+                outputTokens: evalCount ?? 0,
+                outputSeconds: Double(evalDuration ?? 0) / 1_000_000_000,
+                loadSeconds: Double(loadDuration ?? 0) / 1_000_000_000
+            )
         }
     }
 
@@ -173,23 +211,29 @@ actor OllamaClient {
     }
 
     /// Requests a decision and includes diagnostics used by the developer toolbar.
-    func decideWithMetadata(messages: [OllamaMessage]) async throws -> OllamaDecisionResult {
+    func decideWithMetadata(
+        messages: [OllamaMessage],
+        tools: [[String: Any]] = Decision.toolDefinitions
+    ) async throws -> OllamaDecisionResult {
         do {
-            return try await decideWithTraceMetadata(messages: messages)
+            return try await decideWithTraceMetadata(messages: messages, tools: tools)
         } catch let failure as OllamaDecisionFailure {
             throw failure.error
         }
     }
 
     /// Runs one native tool call and, when needed, one assistant-text follow-up.
-    func decideWithTraceMetadata(messages: [OllamaMessage]) async throws -> OllamaDecisionResult {
+    func decideWithTraceMetadata(
+        messages: [OllamaMessage],
+        tools: [[String: Any]] = Decision.toolDefinitions
+    ) async throws -> OllamaDecisionResult {
         let startedAt = Date()
         var rawResponses: [String] = []
 
         do {
             let first = try await chat(
                 messages: messages,
-                tools: Decision.toolDefinitions,
+                tools: tools,
                 keepAlive: .duration(runtimeProfile.keepAlive)
             )
             rawResponses.append(first.rawResponse)
@@ -230,6 +274,7 @@ actor OllamaClient {
             var sourceField = decision.message.isEmpty ? "tool_calls" : "content"
             var evalCount = first.response.evalCount
             var doneReason = first.response.doneReason
+            var timings = first.response.timings
 
             if needsFollowUp {
                 let historyWithoutImages = messages.map { message in
@@ -260,6 +305,7 @@ actor OllamaClient {
                 sourceField = "followup.content"
                 evalCount = combined(first.response.evalCount, followUp.response.evalCount)
                 doneReason = followUp.response.doneReason ?? first.response.doneReason
+                timings = timings + followUp.response.timings
             } else if runtimeProfile.unloadAfterDecision {
                 await unloadModel()
             }
@@ -278,7 +324,8 @@ actor OllamaClient {
                 rawContent: rawResponses.joined(separator: "\n\n--- follow-up response\n"),
                 evalCount: evalCount,
                 doneReason: doneReason,
-                conversationMessages: conversationMessages
+                conversationMessages: conversationMessages,
+                timings: timings
             )
         } catch let failure as ChatRequestFailure {
             if let rawResponse = failure.rawResponse,
@@ -323,11 +370,13 @@ actor OllamaClient {
             throw OllamaError.badResponse("Could not encode chat messages")
         }
 
+        // No "think" key: the instruct model rejects the request outright with a 400, and
+        // a thinking model would spend hundreds of output tokens on a monologue nobody
+        // reads — which was most of this check's latency before.
         var payload: [String: Any] = [
             "model": model,
             "messages": messageObjects,
             "stream": false,
-            "think": "low",
             "options": [
                 "temperature": 0.2,
                 "num_ctx": runtimeProfile.contextTokens,

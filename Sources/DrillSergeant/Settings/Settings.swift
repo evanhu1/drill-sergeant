@@ -15,10 +15,6 @@ final class Settings {
         static let didAutoRelaunchForPermission = "ds.didAutoRelaunchForPermission"
         static let userPreferences = "ds.userPreferences"
         static let workHours = "ds.workHours"
-        static let retiredSetting = String(
-            decoding: [100, 115, 46, 103, 111, 97, 108],
-            as: UTF8.self
-        )
     }
 
     private let defaults: UserDefaults
@@ -30,7 +26,6 @@ final class Settings {
     ) {
         self.defaults = defaults
         self.environment = environment
-        defaults.removeObject(forKey: Key.retiredSetting)
         if environment["DS_RESET_ONBOARDING"] == "1" {
             defaults.removeObject(forKey: Key.onboardingStep)
             defaults.removeObject(forKey: Key.screenPermissionRequestPending)
@@ -44,7 +39,7 @@ final class Settings {
             if let override = environment["DS_MODEL"], !override.isEmpty {
                 return override
             }
-            return defaults.string(forKey: Key.model) ?? "qwen3-vl:8b"
+            return defaults.string(forKey: Key.model) ?? "qwen3-vl:8b-instruct"
         }
         set { defaults.set(newValue, forKey: Key.model) }
     }
@@ -64,7 +59,7 @@ final class Settings {
         get {
             guard let rawValue = defaults.string(forKey: Key.onboardingStep),
                   let step = OnboardingStep(rawValue: rawValue) else {
-                return .welcome
+                return .permission
             }
             return step
         }

@@ -15,6 +15,16 @@ enum AppMain {
                 }
             }
 
+            if CommandLine.arguments.contains("--dump-payload") {
+                CheckBenchmark.dumpPayload()
+            }
+
+            if let runs = benchmarkRuns(arguments: CommandLine.arguments) {
+                _ = NSApplication.shared
+                Task { await CheckBenchmark.run(runs: runs) }
+                RunLoop.main.run()
+            }
+
             let application = NSApplication.shared
             let delegate = AppDelegate()
             application.setActivationPolicy(.accessory)
@@ -22,6 +32,14 @@ enum AppMain {
             application.run()
             withExtendedLifetime(delegate) {}
         }
+    }
+
+    /// `--benchmark [runs]` times one whole check. Defaults to five runs.
+    private static func benchmarkRuns(arguments: [String]) -> Int? {
+        guard let index = arguments.firstIndex(of: "--benchmark") else { return nil }
+        let next = arguments.index(after: index)
+        guard next < arguments.endIndex, let runs = Int(arguments[next]) else { return 5 }
+        return max(1, runs)
     }
 
     private static func renderOutputURL(arguments: [String]) -> URL? {

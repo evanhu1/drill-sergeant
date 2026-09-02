@@ -24,6 +24,29 @@ enum ScreenCaptureError: Error {
 }
 
 enum ScreenCapture {
+    /// The stages `--benchmark` times. Nothing observes them in a normal run.
+    enum Stage: String {
+        case shareableContent
+        case captureImage
+        case encode
+    }
+
+    /// Set only by the benchmark harness; nil in production, so this costs one nil check.
+    nonisolated(unsafe) static var stageObserver: (@Sendable (Stage, TimeInterval) -> Void)?
+
+    private static func timed<T>(_ stage: Stage, _ work: () throws -> T) rethrows -> T {
+        guard stageObserver != nil else { return try work() }
+        let startedAt = DispatchTime.now().uptimeNanoseconds
+        let value = try work()
+        report(stage, since: startedAt)
+        return value
+    }
+
+    private static func report(_ stage: Stage, since startedAt: UInt64) {
+        let elapsed = DispatchTime.now().uptimeNanoseconds &- startedAt
+        stageObserver?(stage, Double(elapsed) / 1_000_000_000)
+    }
+
     /// Captures the active window, falling back to the display at the cursor.
     static func capture() async throws -> Screenshot {
         guard ScreenPermission.isGranted() else {
@@ -31,10 +54,12 @@ enum ScreenCapture {
         }
 
         do {
+            let contentStartedAt = DispatchTime.now().uptimeNanoseconds
             let content = try await SCShareableContent.excludingDesktopWindows(
                 false,
                 onScreenWindowsOnly: true
             )
+            report(.shareableContent, since: contentStartedAt)
 
             if let target = ActiveWindowInspector.currentTarget() {
                 if let window = content.windows.first(where: {
@@ -136,11 +161,13 @@ enum ScreenCapture {
         configuration: SCStreamConfiguration,
         source: CaptureSource
     ) async throws -> Screenshot {
+        let imageStartedAt = DispatchTime.now().uptimeNanoseconds
         let image = try await SCScreenshotManager.captureImage(
             contentFilter: filter,
             configuration: configuration
         )
-        guard let jpegData = jpegData(from: image) else {
+        report(.captureImage, since: imageStartedAt)
+        guard let jpegData = timed(.encode, { jpegData(from: image) }) else {
             throw ScreenCaptureError.failed("Could not encode screenshot as JPEG")
         }
 

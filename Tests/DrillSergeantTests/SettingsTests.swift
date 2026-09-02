@@ -8,9 +8,9 @@ final class SettingsTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suiteName) }
         let settings = Settings(defaults: defaults, environment: [:])
 
-        XCTAssertEqual(settings.model, "qwen3-vl:8b")
+        XCTAssertEqual(settings.model, "qwen3-vl:8b-instruct")
         XCTAssertEqual(settings.intervalMinutes, 10)
-        XCTAssertEqual(settings.onboardingStep, .welcome)
+        XCTAssertEqual(settings.onboardingStep, .permission)
         XCTAssertEqual(settings.ollamaBaseURL.absoluteString, "http://127.0.0.1:11434")
         XCTAssertFalse(settings.screenPermissionRequestPending)
         XCTAssertFalse(settings.directCapturePermissionRequestPending)
@@ -73,20 +73,6 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(settings.ollamaBaseURL.absoluteString, "http://localhost:2222")
     }
 
-    func testInitializationRemovesRetiredSetting() {
-        let (defaults, suiteName) = makeDefaults()
-        defer { defaults.removePersistentDomain(forName: suiteName) }
-        let retiredKey = String(
-            decoding: [100, 115, 46, 103, 111, 97, 108],
-            as: UTF8.self
-        )
-        defaults.set("Retired value", forKey: retiredKey)
-
-        _ = Settings(defaults: defaults, environment: [:])
-
-        XCTAssertNil(defaults.object(forKey: retiredKey))
-    }
-
     func testResetEnvironmentClearsOnboarding() throws {
         let (defaults, suiteName) = makeDefaults()
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -106,7 +92,7 @@ final class SettingsTests: XCTestCase {
             environment: ["DS_RESET_ONBOARDING": "1"]
         )
 
-        XCTAssertEqual(settings.onboardingStep, .welcome)
+        XCTAssertEqual(settings.onboardingStep, .permission)
         XCTAssertFalse(settings.screenPermissionRequestPending)
         XCTAssertFalse(settings.directCapturePermissionRequestPending)
         XCTAssertEqual(settings.userPreferences, ["Slack counts as work."])

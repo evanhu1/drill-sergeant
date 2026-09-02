@@ -118,6 +118,20 @@ final class DecisionTests: XCTestCase {
         )
     }
 
+    /// A check may only set_idle, set_angry, or snooze. Offering the reply-only tools
+    /// there spends prompt tokens on actions `decisionAllowedForCheck` throws away.
+    func testCheckToolDefinitionsOfferOnlyTheToolsACheckMayCall() throws {
+        var names: Set<String> = []
+        for definition in Decision.checkToolDefinitions {
+            let function = try XCTUnwrap(definition["function"] as? [String: Any])
+            names.insert(try XCTUnwrap(function["name"] as? String))
+        }
+
+        XCTAssertEqual(names, ["set_idle", "set_angry", "snooze"])
+        XCTAssertFalse(names.contains(Tool.set_work_hours.rawValue))
+        XCTAssertFalse(names.contains(Tool.save_user_preference.rawValue))
+    }
+
     private func call(
         _ tool: Tool,
         arguments: OllamaToolArguments = .init()

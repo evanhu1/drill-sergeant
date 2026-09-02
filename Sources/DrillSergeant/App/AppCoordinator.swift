@@ -256,7 +256,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
 
     func resetOnboarding() {
         settings.clearPendingPermissionRequests()
-        settings.onboardingStep = .welcome
+        settings.onboardingStep = .permission
         conversation?.reset()
         scheduler?.stop()
 
@@ -478,7 +478,11 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         conversation.appendUser(prompt, image: screenshot.base64)
 
         let messages = modelMessages(conversation: conversation)
-        let outcome = await requestDecision(messages: messages, ollama: ollama)
+        let outcome = await requestDecision(
+            messages: messages,
+            ollama: ollama,
+            tools: Decision.checkToolDefinitions
+        )
         writeTrace(
             reason: CheckTrace.Reason(reason),
             context: context,
@@ -539,11 +543,15 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
 
     private func requestDecision(
         messages: [OllamaMessage],
-        ollama: OllamaClient
+        ollama: OllamaClient,
+        tools: [[String: Any]] = Decision.toolDefinitions
     ) async -> DecisionOutcome {
         let startedAt = Date()
         do {
-            let result = try await ollama.decideWithTraceMetadata(messages: messages)
+            let result = try await ollama.decideWithTraceMetadata(
+                messages: messages,
+                tools: tools
+            )
             lastDecision = result
             return DecisionOutcome(
                 decision: result.decision,

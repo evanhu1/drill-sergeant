@@ -295,18 +295,6 @@ reset_stale_screen_grant() {
     tccutil reset ScreenCapture "${BUNDLE_IDENTIFIER}" >/dev/null 2>&1 || true
 }
 
-# Earlier installers put the app in /Applications. Leaving that copy behind would give
-# the user two Drill Sergeants and a login item pointing at the old one.
-remove_legacy_copy() {
-    local legacy="/Applications/${APP_NAME}"
-    [[ -d "${legacy}" ]] || return 0
-    if rm -rf "${legacy}" 2>/dev/null; then
-        tccutil reset ScreenCapture "${BUNDLE_IDENTIFIER}" >/dev/null 2>&1 || true
-        return 0
-    fi
-    return 1
-}
-
 install_app() {
     local source_app="$1"
     mkdir -p "${APPLICATIONS_DIR}"
@@ -376,14 +364,9 @@ main() {
     fi
 
     step "Installing"
-    local legacy_copy_remains=0
-    remove_legacy_copy || legacy_copy_remains=1
     local installed_app
     installed_app="$(install_app "${source_app}")"
     done_step "Installed" "${installed_app/#${HOME}/~}"
-    if ((legacy_copy_remains)); then
-        note "Delete the old copy in /Applications — it needs an administrator."
-    fi
 
     step "Setting up Ollama"
     wait "${ollama_pid}" 2>/dev/null || true

@@ -20,7 +20,7 @@ Implement exactly these signatures so that modules built in parallel fit togethe
 | Language | Swift 5.9+ (`swift-tools-version: 5.9`), Swift Package Manager, **no third-party deps** |
 | UI | AppKit windows (`NSPanel`) hosting SwiftUI views (`NSHostingView`) |
 | Concurrency | Swift Concurrency (`async/await`, `@MainActor`) |
-| LLM | Ollama HTTP API at `http://127.0.0.1:11434`, default model `qwen3-vl:8b` |
+| LLM | Ollama HTTP API at `http://127.0.0.1:11434`, default model `qwen3-vl:8b-instruct` |
 | Screenshot | ScreenCaptureKit (`SCScreenshotManager`) |
 | Persistence | `UserDefaults` (suite: standard), key prefix `ds.` |
 | Bundle ID | `com.evanhu.drillsergeant` |
@@ -480,9 +480,9 @@ Implement `BubbleWindow: ChatPresenter`.
 final class Settings {
     static let shared = Settings()
     var goal: String                    // key ds.goal, default ""
-    var model: String                   // key ds.model, default "qwen3-vl:8b"
+    var model: String                   // key ds.model, default "qwen3-vl:8b-instruct"
     var intervalMinutes: Int            // key ds.intervalMinutes, default 10
-    var onboardingStep: OnboardingStep  // key ds.onboardingStep, default .welcome
+    var onboardingStep: OnboardingStep  // key ds.onboardingStep, default .permission
     var ollamaBaseURL: URL              // key ds.ollamaBaseURL, default http://127.0.0.1:11434
 }
 ```
@@ -949,7 +949,7 @@ Folder name: `yyyy-MM-dd_HH-mm-ss` in local time, then `_` and the reason
 ```
 check: scheduled
 time: 2026-09-02 04:21:05
-model: qwen3-vl:8b
+model: qwen3-vl:8b-instruct
 state: watching (for 2s), previous idle
 capture: window "Arc" 1280x803, 116 KB
 active window: Arc — “Week of September 7, 2026”
@@ -1351,9 +1351,28 @@ Check traces show assistant content and the native function name/arguments separ
 traces preserve the raw HTTP response. The developer toolbar reports `tool_calls` or
 `followup.content` as the decision source.
 
-## 31. Eight-gigabyte memory mode (amends 4.2, 5.1, 17.1, and 24)
+## 31. Check latency (amends 5.1)
 
-Keep `qwen3-vl:8b` as the default and only installed model. When
+The model call is the whole cost of a check: capture, encoding, and output processing together
+run in about 10 ms, against seconds for the request. Two rules keep it down.
+
+Use an `-instruct` model. The plain `qwen3-vl:8b` tag is the thinking build, which spends 300-600
+output tokens per check on a monologue that is discarded — most of the latency, and the cause of
+30-second checks. Send no `think` option; instruct builds reject the request with HTTP 400.
+
+Send only the tools the call may use. A screenshot check offers `set_idle`, `set_angry`, and
+`snooze` only. `save_user_preference` and `set_work_hours` answer a user reply, and a check
+already discards `set_work_hours`, so offering them costs 285 prompt tokens for nothing.
+
+Two things that look like optimizations and are not. Screenshot resolution below 1280 pixels does
+not change prompt tokens — Ollama normalizes the image to a fixed budget, so 1280, 768, and 320
+all cost the same; only exceeding 1280 costs more. And prefix caching, though worth 100x on a
+repeated request, does not survive a changed image, so the system prompt and tool schemas are
+re-prefilled on every check.
+
+## 32. Eight-gigabyte memory mode (amends 4.2, 5.1, 17.1, and 24)
+
+Keep `qwen3-vl:8b-instruct` as the default and only installed model. When
 `ProcessInfo.processInfo.physicalMemory` is 8 GiB or less, automatically use a low-memory runtime
 profile:
 

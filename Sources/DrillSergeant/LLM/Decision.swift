@@ -161,6 +161,15 @@ struct Decision: Equatable {
         ),
     ]
 
+    /// The tools a screenshot check may call. `save_user_preference` and `set_work_hours`
+    /// answer a user reply and are rejected during a check, so offering them there only
+    /// spends prompt tokens — `set_work_hours` alone costs 198 of them.
+    static let checkToolDefinitions: [[String: Any]] = toolDefinitions.filter { definition in
+        guard let function = definition["function"] as? [String: Any],
+              let name = function["name"] as? String else { return false }
+        return [Tool.set_idle, .set_angry, .snooze].map(\.rawValue).contains(name)
+    }
+
     init(
         tool: Tool,
         snoozeMinutes: Int?,

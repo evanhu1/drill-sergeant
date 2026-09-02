@@ -1,8 +1,6 @@
 import Foundation
 
 enum OnboardingStep: String, Codable {
-    /// Kept so installs from older builds still resume. It now runs the permission step.
-    case welcome
     case permission
     case relaunch
     case directCapturePermission
@@ -77,7 +75,7 @@ final class OnboardingFlow {
         chat.onClose = settings.onboardingStep == .done ? nil : quitHandler
 
         switch settings.onboardingStep {
-        case .welcome, .permission:
+        case .permission:
             if settings.screenPermissionRequestPending {
                 resumePermissionRequest()
             } else {
