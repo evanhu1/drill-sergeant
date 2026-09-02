@@ -4,6 +4,7 @@ import Foundation
 @MainActor
 final class AppCoordinator: SchedulerDelegate, DevActions {
     private let settings: Settings
+    private let traceWriter: CheckTrace
 
     private var eyesModel: EyesModel?
     private var notchWindow: NotchWindow?
@@ -21,6 +22,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
 
     init() {
         settings = .shared
+        traceWriter = CheckTrace()
     }
 
     func start() {
@@ -224,6 +226,15 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         }
     }
 
+    func openTraceFolder() {
+        do {
+            try traceWriter.createDirectoryIfNeeded()
+            NSWorkspace.shared.activateFileViewerSelecting([traceWriter.directory])
+        } catch {
+            Log.error("Could not open trace folder: \(error.localizedDescription)")
+        }
+    }
+
     func scheduler(
         _ scheduler: Scheduler,
         didChange state: CompanionState,
@@ -364,6 +375,13 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
 
         let messages = modelMessages(conversation: conversation)
         let outcome = await requestDecision(messages: messages, ollama: ollama)
+        writeTrace(
+            reason: CheckTrace.Reason(reason),
+            context: context,
+            screenshot: screenshot,
+            messages: messages,
+            response: outcome.traceResponse
+        )
         handle(
             decision: outcome.decision,
             conversation: conversation,
@@ -394,6 +412,13 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         Log.info("Sending user reply to Ollama; state=\(scheduler.state.rawValue)")
         let messages = [systemMessage()] + turns
         let outcome = await requestDecision(messages: messages, ollama: ollama)
+        writeTrace(
+            reason: .reply,
+            context: context,
+            screenshot: nil,
+            messages: messages,
+            response: outcome.traceResponse
+        )
         handle(
             decision: outcome.decision,
             conversation: conversation,
@@ -407,27 +432,87 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         messages: [OllamaMessage],
         ollama: OllamaClient
     ) async -> DecisionOutcome {
+        let startedAt = Date()
         do {
-            let result = try await ollama.decideWithMetadata(messages: messages)
+            let result = try await ollama.decideWithTraceMetadata(messages: messages)
             lastDecision = result
             return DecisionOutcome(
                 decision: result.decision,
-                errorMessage: nil
+                errorMessage: nil,
+                traceResponse: .success(result)
             )
-        } catch let error as OllamaError {
-            Log.error("Ollama decision failed: \(description(of: error))")
+        } catch let failure as OllamaDecisionFailure {
+            let description = description(of: failure.error)
+            Log.error("Ollama decision failed: \(description)")
             return DecisionOutcome(
                 decision: idleDecision,
-                errorMessage: "Can't reach Ollama. Make sure it's running and "
-                    + "\(settings.model) is installed."
+                errorMessage: ollamaErrorMessage,
+                traceResponse: .failure(
+                    error: description,
+                    latency: failure.latency,
+                    rawContent: failure.rawContent
+                )
+            )
+        } catch let error as OllamaError {
+            let description = description(of: error)
+            Log.error("Ollama decision failed: \(description)")
+            return DecisionOutcome(
+                decision: idleDecision,
+                errorMessage: ollamaErrorMessage,
+                traceResponse: .failure(
+                    error: description,
+                    latency: Date().timeIntervalSince(startedAt),
+                    rawContent: nil
+                )
             )
         } catch {
             Log.error("Ollama decision failed: \(error.localizedDescription)")
             return DecisionOutcome(
                 decision: idleDecision,
-                errorMessage: "Can't reach Ollama. Make sure it's running."
+                errorMessage: "Can't reach Ollama. Make sure it's running.",
+                traceResponse: .failure(
+                    error: error.localizedDescription,
+                    latency: Date().timeIntervalSince(startedAt),
+                    rawContent: nil
+                )
             )
         }
+    }
+
+    private func writeTrace(
+        reason: CheckTrace.Reason,
+        context: CheckContext,
+        screenshot: Screenshot?,
+        messages: [OllamaMessage],
+        response: CheckTrace.Response
+    ) {
+        guard settings.tracingEnabled else { return }
+        let request = CheckTrace.Request(
+            reason: reason,
+            time: context.now,
+            model: settings.model,
+            state: context.state,
+            previousState: context.previousState,
+            stateAge: context.stateAge,
+            capture: screenshot.map(CheckTrace.capture),
+            activeWindow: context.window,
+            messages: messages
+        )
+        do {
+            let folder = try traceWriter.write(
+                request: request,
+                response: response,
+                screenshotData: screenshot?.jpegData
+            )
+            Log.info("Wrote check trace \(folder.lastPathComponent)")
+        } catch {
+            Log.error("Could not write check trace: \(error.localizedDescription)")
+        }
+    }
+
+    private var ollamaErrorMessage: String {
+        "Can't reach Ollama. Make sure it's running and "
+            + "\(settings.model) is installed."
     }
 
     private func handle(
@@ -540,6 +625,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
     private struct DecisionOutcome {
         let decision: Decision
         let errorMessage: String?
+        let traceResponse: CheckTrace.Response
     }
 
     private func description(of reason: CheckReason) -> String {

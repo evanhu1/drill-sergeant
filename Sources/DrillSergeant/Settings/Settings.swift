@@ -76,4 +76,8 @@ final class Settings {
         }
         set { defaults.set(newValue.absoluteString, forKey: Key.ollamaBaseURL) }
     }
+
+    var tracingEnabled: Bool {
+        environment["DS_TRACE"] != "0"
+    }
 }

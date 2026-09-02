@@ -12,6 +12,7 @@ final class SettingsTests: XCTestCase {
         XCTAssertEqual(settings.intervalMinutes, 10)
         XCTAssertEqual(settings.onboardingStep, .welcome)
         XCTAssertEqual(settings.ollamaBaseURL.absoluteString, "http://127.0.0.1:11434")
+        XCTAssertTrue(settings.tracingEnabled)
 
         settings.model = "custom:8b"
         settings.intervalMinutes = 15
@@ -67,6 +68,15 @@ final class SettingsTests: XCTestCase {
         )
 
         XCTAssertEqual(settings.onboardingStep, .welcome)
+    }
+
+    func testTraceEnvironmentCanDisableTracing() {
+        let (defaults, suiteName) = makeDefaults()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+
+        let settings = Settings(defaults: defaults, environment: ["DS_TRACE": "0"])
+
+        XCTAssertFalse(settings.tracingEnabled)
     }
 
     private func makeDefaults() -> (UserDefaults, String) {

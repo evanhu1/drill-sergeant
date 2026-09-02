@@ -17,6 +17,15 @@ struct OllamaDecisionResult: Equatable {
     let decision: Decision
     let latency: TimeInterval
     let sourceField: String
+    let rawContent: String
+    let evalCount: Int?
+    let doneReason: String?
+}
+
+struct OllamaDecisionFailure: Error, Equatable {
+    let error: OllamaError
+    let latency: TimeInterval?
+    let rawContent: String?
 }
 
 actor OllamaClient {
@@ -78,6 +87,15 @@ actor OllamaClient {
 
     /// Requests a decision and includes diagnostics used by the developer toolbar.
     func decideWithMetadata(messages: [OllamaMessage]) async throws -> OllamaDecisionResult {
+        do {
+            return try await decideWithTraceMetadata(messages: messages)
+        } catch let failure as OllamaDecisionFailure {
+            throw failure.error
+        }
+    }
+
+    /// Requests a decision while preserving raw response details when parsing fails.
+    func decideWithTraceMetadata(messages: [OllamaMessage]) async throws -> OllamaDecisionResult {
         let encodedMessages = try JSONEncoder().encode(messages)
         guard let messageObjects = try JSONSerialization.jsonObject(
             with: encodedMessages
@@ -111,15 +129,33 @@ actor OllamaClient {
 
         let startedAt = Date()
         Log.info("Ollama request: \(body.count) bytes")
-        let (data, response) = try await perform(request)
+        let data: Data
+        let response: HTTPURLResponse
+        do {
+            (data, response) = try await perform(request)
+        } catch let error as OllamaError {
+            throw OllamaDecisionFailure(
+                error: error,
+                latency: Date().timeIntervalSince(startedAt),
+                rawContent: nil
+            )
+        }
         let elapsed = Date().timeIntervalSince(startedAt)
         Log.info(String(format: "Ollama response: %d bytes in %.2fs", data.count, elapsed))
+        let rawResponse = String(data: data, encoding: .utf8)
 
         guard (200..<300).contains(response.statusCode) else {
+            let error: OllamaError
             if response.statusCode == 404 || responseMentionsMissingModel(data) {
-                throw OllamaError.modelMissing(model)
+                error = .modelMissing(model)
+            } else {
+                error = .http(response.statusCode)
             }
-            throw OllamaError.http(response.statusCode)
+            throw OllamaDecisionFailure(
+                error: error,
+                latency: elapsed,
+                rawContent: rawResponse
+            )
         }
 
         struct ChatResponse: Decodable {
@@ -139,7 +175,11 @@ actor OllamaClient {
             }
         }
         guard let chat = try? JSONDecoder().decode(ChatResponse.self, from: data) else {
-            throw OllamaError.badResponse("Invalid response from /api/chat")
+            throw OllamaDecisionFailure(
+                error: .badResponse("Invalid response from /api/chat"),
+                latency: elapsed,
+                rawContent: rawResponse
+            )
         }
 
         let decisionText: String
@@ -151,7 +191,11 @@ actor OllamaClient {
             decisionText = thinking
             responseField = "thinking"
         } else {
-            throw OllamaError.badResponse("No decision in message.content or message.thinking")
+            throw OllamaDecisionFailure(
+                error: .badResponse("No decision in message.content or message.thinking"),
+                latency: elapsed,
+                rawContent: rawResponse
+            )
         }
 
         var details = ["field=message.\(responseField)"]
@@ -167,11 +211,18 @@ actor OllamaClient {
             return OllamaDecisionResult(
                 decision: try Decision.parse(decisionText),
                 latency: elapsed,
-                sourceField: responseField
+                sourceField: responseField,
+                rawContent: decisionText,
+                evalCount: chat.evalCount,
+                doneReason: chat.doneReason
             )
         } catch {
-            throw OllamaError.badResponse(
-                "Invalid decision in message.\(responseField): \(error.localizedDescription)"
+            throw OllamaDecisionFailure(
+                error: .badResponse(
+                    "Invalid decision in message.\(responseField): \(error.localizedDescription)"
+                ),
+                latency: elapsed,
+                rawContent: decisionText
             )
         }
     }

@@ -68,6 +68,12 @@ final class OllamaClientTests: XCTestCase {
             Decision(tool: .set_idle, snoozeMinutes: nil, message: "Good.")
         )
         XCTAssertEqual(result.sourceField, "thinking")
+        XCTAssertEqual(
+            result.rawContent,
+            #"{"tool":"set_idle","message":"Good."}"#
+        )
+        XCTAssertEqual(result.evalCount, 18)
+        XCTAssertEqual(result.doneReason, "stop")
         XCTAssertGreaterThanOrEqual(result.latency, 0)
     }
 

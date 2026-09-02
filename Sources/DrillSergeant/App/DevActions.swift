@@ -13,4 +13,5 @@ protocol DevActions: AnyObject {
     func skipOnboarding()
     func setTrayExtended(_ extended: Bool)
     func renderStates() async -> URL
+    func openTraceFolder()
 }

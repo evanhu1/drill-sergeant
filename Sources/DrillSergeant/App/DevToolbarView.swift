@@ -86,6 +86,12 @@ struct DevToolbarView: View {
                 }
                 .disabled(isRendering)
             }
+
+            Section("Traces") {
+                Button("Open trace folder") {
+                    actions.openTraceFolder()
+                }
+            }
         }
         .formStyle(.grouped)
         .formStyle(.grouped)
