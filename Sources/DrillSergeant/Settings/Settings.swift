@@ -10,6 +10,8 @@ final class Settings {
         static let onboardingStep = "ds.onboardingStep"
         static let ollamaBaseURL = "ds.ollamaBaseURL"
         static let screenPermissionRequestPending = "ds.screenPermissionRequestPending"
+        static let directCapturePermissionRequestPending =
+            "ds.directCapturePermissionRequestPending"
         static let userPreferences = "ds.userPreferences"
         static let retiredSetting = String(
             decoding: [100, 115, 46, 103, 111, 97, 108],
@@ -29,6 +31,8 @@ final class Settings {
         defaults.removeObject(forKey: Key.retiredSetting)
         if environment["DS_RESET_ONBOARDING"] == "1" {
             defaults.removeObject(forKey: Key.onboardingStep)
+            defaults.removeObject(forKey: Key.screenPermissionRequestPending)
+            defaults.removeObject(forKey: Key.directCapturePermissionRequestPending)
         }
     }
 
@@ -86,6 +90,20 @@ final class Settings {
     var screenPermissionRequestPending: Bool {
         get { defaults.bool(forKey: Key.screenPermissionRequestPending) }
         set { defaults.set(newValue, forKey: Key.screenPermissionRequestPending) }
+    }
+
+    var directCapturePermissionRequestPending: Bool {
+        get { defaults.bool(forKey: Key.directCapturePermissionRequestPending) }
+        set { defaults.set(newValue, forKey: Key.directCapturePermissionRequestPending) }
+    }
+
+    var hasPendingPermissionRequest: Bool {
+        screenPermissionRequestPending || directCapturePermissionRequestPending
+    }
+
+    func clearPendingPermissionRequests() {
+        screenPermissionRequestPending = false
+        directCapturePermissionRequestPending = false
     }
 
     var userPreferences: [String] {

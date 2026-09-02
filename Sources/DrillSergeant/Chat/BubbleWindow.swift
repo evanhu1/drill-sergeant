@@ -36,7 +36,10 @@ final class BubbleWindow: NSPanel, ChatPresenter {
 
     var affordance: BubbleAffordance {
         get { model.affordance }
-        set { model.affordance = newValue }
+        set {
+            model.affordance = newValue
+            hostingView.refreshCursor()
+        }
     }
 
     var isReplying: Bool { model.isInputOpen }
@@ -50,6 +53,12 @@ final class BubbleWindow: NSPanel, ChatPresenter {
         let model = BubbleModel()
         let view = BubbleView(model: model) { _ in }
         let hostingView = BubbleHostingView(rootView: view)
+        hostingView.cursorProvider = { [weak model] in
+            guard model?.affordance.usesPointingHandCursor == true else {
+                return .arrow
+            }
+            return .pointingHand
+        }
 
         self.notchGeometry = notchGeometry
         self.notchPanelHeight = panelHeight
@@ -276,11 +285,13 @@ final class BubbleWindow: NSPanel, ChatPresenter {
 ///
 /// The bubble panel is non-activating, so it is rarely the key window and AppKit leaves the
 /// cursor to whatever window is underneath. Over a text area that means an I-beam. A
-/// `.cursorUpdate` tracking area works regardless of key status and restores the arrow. The
-/// reply field installs its own tracking area, so it still shows an I-beam when open.
+/// `.cursorUpdate` tracking area works regardless of key status. Tap-to-advance onboarding
+/// bubbles use a pointing hand; ordinary bubbles restore the arrow. The reply field installs its
+/// own tracking area, so it still shows an I-beam when open.
 @MainActor
 final class BubbleHostingView<Content: View>: NSHostingView<Content> {
     private var cursorTrackingArea: NSTrackingArea?
+    var cursorProvider: () -> NSCursor = { .arrow }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -298,6 +309,13 @@ final class BubbleHostingView<Content: View>: NSHostingView<Content> {
     }
 
     override func cursorUpdate(with event: NSEvent) {
-        NSCursor.arrow.set()
+        cursorProvider().set()
+    }
+
+    func refreshCursor() {
+        guard let window else { return }
+        let location = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+        guard bounds.contains(location) else { return }
+        cursorProvider().set()
     }
 }

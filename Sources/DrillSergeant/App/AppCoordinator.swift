@@ -6,6 +6,7 @@ import SwiftUI
 final class AppCoordinator: SchedulerDelegate, DevActions {
     private let settings: Settings
     private let traceWriter: CheckTrace
+    private let launchReplacement: (RelaunchCommand) throws -> Void
 
     private var eyesModel: EyesModel?
     private var notchWindow: NotchWindow?
@@ -20,10 +21,20 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
     private var lastDecision: OllamaDecisionResult?
     private var pendingReplyCount = 0
     private var hasStarted = false
+    private var isRelaunchScheduled = false
+    private var isIntentionalQuit = false
 
-    init() {
-        settings = .shared
+    convenience init() {
+        self.init(settings: .shared, launchReplacement: Relauncher.launch)
+    }
+
+    init(
+        settings: Settings,
+        launchReplacement: @escaping (RelaunchCommand) throws -> Void
+    ) {
+        self.settings = settings
         traceWriter = CheckTrace()
+        self.launchReplacement = launchReplacement
     }
 
     func start() {
@@ -99,36 +110,8 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
     }
 
     func relaunch() {
-        let process = Process()
-        let bundleURL = Bundle.main.bundleURL
-
-        if bundleURL.pathExtension.localizedCaseInsensitiveCompare("app") == .orderedSame {
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-            process.arguments = ["-n", bundleURL.path]
-        } else {
-            guard let executableURL = Bundle.main.executableURL else {
-                Log.error("Relaunch failed: current executable path is unavailable")
-                chat?.show("I couldn't restart. Quit and open me again.", autoHide: false)
-                return
-            }
-            process.executableURL = executableURL
-            process.arguments = Array(CommandLine.arguments.dropFirst())
-        }
-
-        do {
-            var environment = ProcessInfo.processInfo.environment
-            environment.removeValue(forKey: "DS_RESET_ONBOARDING")
-            process.environment = environment
-            try process.run()
-            Log.info("Started replacement process for relaunch")
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 500_000_000)
-                NSApp.terminate(nil)
-            }
-        } catch {
-            Log.error("Relaunch failed: \(error.localizedDescription)")
-            chat?.show("I couldn't restart. Quit and open me again.", autoHide: false)
-        }
+        guard scheduleRelaunch() else { return }
+        NSApp.terminate(nil)
     }
 
     func checkNow() {
@@ -138,7 +121,52 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
 
     func quit() {
         Log.info("Quit requested")
+        prepareForIntentionalQuit()
         NSApp.terminate(nil)
+    }
+
+    func prepareForIntentionalQuit() {
+        isIntentionalQuit = true
+        settings.clearPendingPermissionRequests()
+    }
+
+    func applicationShouldTerminate(
+        quitReason: AEEventID?
+    ) -> NSApplication.TerminateReply {
+        guard !isIntentionalQuit,
+              !TerminationReason.endsLoginSession(quitReason),
+              settings.hasPendingPermissionRequest else {
+            return .terminateNow
+        }
+
+        Log.info("External quit received during a permission request")
+        return scheduleRelaunch() ? .terminateNow : .terminateCancel
+    }
+
+    private func scheduleRelaunch() -> Bool {
+        if isRelaunchScheduled { return true }
+        guard let command = Relauncher.command(
+            bundleURL: Bundle.main.bundleURL,
+            executableURL: Bundle.main.executableURL,
+            arguments: CommandLine.arguments,
+            parentProcessID: ProcessInfo.processInfo.processIdentifier,
+            environment: ProcessInfo.processInfo.environment
+        ) else {
+            Log.error("Relaunch failed: current executable path is unavailable")
+            chat?.show("I couldn't restart. Click here to try again.", autoHide: false)
+            return false
+        }
+
+        do {
+            try launchReplacement(command)
+            isRelaunchScheduled = true
+            Log.info("Scheduled replacement process for relaunch")
+            return true
+        } catch {
+            Log.error("Relaunch failed: \(error.localizedDescription)")
+            chat?.show("I couldn't restart. Click here to try again.", autoHide: false)
+            return false
+        }
     }
 
     var statusText: String {
@@ -210,6 +238,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
     }
 
     func resetOnboarding() {
+        settings.clearPendingPermissionRequests()
         settings.onboardingStep = .welcome
         conversation?.reset()
         scheduler?.stop()
@@ -222,6 +251,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
     }
 
     func skipOnboarding() {
+        settings.clearPendingPermissionRequests()
         settings.onboardingStep = .done
         onboarding?.start()
         onboarding = nil
@@ -629,7 +659,6 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
                 )
                 chat?.onTap = { [weak self] in self?.relaunch() }
             } else {
-                settings.screenPermissionRequestPending = false
                 ScreenPermission.openSystemSettings()
             }
         }
@@ -640,7 +669,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         chat?.show("Checking Screen Recording permission…", autoHide: false)
         Task { @MainActor [weak self] in
             guard let self else { return }
-            if await ScreenPermission.probe() {
+            if await waitForScreenPermission() {
                 settings.screenPermissionRequestPending = false
                 scheduler?.start()
                 chat?.show("Permission granted. I'm back on watch.", autoHide: true)
@@ -653,6 +682,26 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
                 presentPermissionRequest()
             }
         }
+    }
+
+    private func waitForScreenPermission(
+        attempts: Int = 5,
+        interval: TimeInterval = 2
+    ) async -> Bool {
+        for attempt in 1...max(1, attempts) {
+            if await ScreenPermission.probe() {
+                return true
+            }
+            guard attempt < attempts else { break }
+            do {
+                try await Task.sleep(
+                    nanoseconds: UInt64(max(0.001, interval) * 1_000_000_000)
+                )
+            } catch {
+                return false
+            }
+        }
+        return false
     }
 
     private var idleDecision: Decision {

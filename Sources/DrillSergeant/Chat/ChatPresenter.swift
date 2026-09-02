@@ -1,6 +1,10 @@
 enum BubbleAffordance: Equatable {
     case reply
     case onboardingNext
+
+    var usesPointingHandCursor: Bool {
+        self == .onboardingNext
+    }
 }
 
 @MainActor

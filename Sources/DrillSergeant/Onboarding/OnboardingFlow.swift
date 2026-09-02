@@ -4,6 +4,7 @@ enum OnboardingStep: String, Codable {
     case welcome
     case permission
     case relaunch
+    case directCapturePermission
     case test
     case done
 }
@@ -16,11 +17,21 @@ final class OnboardingFlow {
     var probePermission: () async -> Bool = ScreenPermission.probe
     var requestPermission: () -> Bool = ScreenPermission.request
     var openPermissionSettings: () -> Void = ScreenPermission.openSystemSettings
+    var requestDirectCapturePermission: () async -> Bool = {
+        do {
+            _ = try await ScreenCapture.capture()
+            return true
+        } catch {
+            Log.warn("Direct screen capture permission probe failed: \(error.localizedDescription)")
+            return false
+        }
+    }
     var isYouTubeOpen: () -> Bool = {
         ActiveWindowInspector.current().looksLikeYouTube
     }
     var isOllamaReady: () async -> Bool
     var pollInterval: TimeInterval = 2
+    var permissionResumeAttempts = 5
 
     private let chat: ChatPresenter
     private let scheduler: Scheduler
@@ -70,6 +81,12 @@ final class OnboardingFlow {
             }
         case .relaunch:
             resumePermissionRequest()
+        case .directCapturePermission:
+            if settings.directCapturePermissionRequestPending {
+                resumeDirectCapturePermissionRequest()
+            } else {
+                presentDirectCapturePermissionStep()
+            }
         case .test:
             beginTestStep()
         case .done:
@@ -103,6 +120,7 @@ final class OnboardingFlow {
     /// vanished whenever the grant was inherited rather than this build's own.
     private func beginPermissionStep() {
         clearChatHandlers()
+        chat.affordance = .onboardingNext
         settings.onboardingStep = .permission
         permissionRequestAttempts = 0
         chat.show(
@@ -154,10 +172,6 @@ final class OnboardingFlow {
                     permissionNeedsRelaunch()
                     return
                 }
-                if settings.screenPermissionRequestPending {
-                    permissionRequestDidNotComplete()
-                    return
-                }
             }
         }
     }
@@ -168,7 +182,7 @@ final class OnboardingFlow {
         pollingTask?.cancel()
         pollingTask = nil
         settings.screenPermissionRequestPending = false
-        beginTestStep()
+        presentDirectCapturePermissionStep()
     }
 
     private func permissionNeedsRelaunch() {
@@ -186,18 +200,29 @@ final class OnboardingFlow {
         clearChatHandlers()
         chat.show("Checking Screen Recording permission…", autoHide: false)
         checkTask?.cancel()
+        let attempts = max(1, permissionResumeAttempts)
+        let interval = pollInterval
         checkTask = Task { [weak self] in
             guard let self else { return }
-            if await probePermission() {
+            for attempt in 1...attempts {
+                if await probePermission() {
+                    guard !Task.isCancelled else { return }
+                    Log.info("Screen Recording permission works after relaunch")
+                    permissionIsWorking()
+                    return
+                }
                 guard !Task.isCancelled else { return }
-                permissionIsWorking()
-                return
+                if attempt < attempts {
+                    guard await Self.sleep(for: interval) else { return }
+                }
             }
-            guard !Task.isCancelled else { return }
+
             if isPermissionGranted() {
+                Log.info("Screen Recording grant is recorded but still requires a restart")
                 settings.onboardingStep = .relaunch
                 presentRelaunchStep()
             } else {
+                Log.info("Screen Recording permission was not granted after relaunch")
                 permissionRequestDidNotComplete()
             }
         }
@@ -210,6 +235,7 @@ final class OnboardingFlow {
 
     private func presentRelaunchStep() {
         clearChatHandlers()
+        chat.affordance = .onboardingNext
         chat.show(
             "Permission granted. I have to restart to use it. Click here to restart.",
             autoHide: false
@@ -219,10 +245,74 @@ final class OnboardingFlow {
         }
     }
 
+    /// macOS separately asks whether the app may capture without presenting its window picker.
+    /// Trigger that prompt only after an explicit tap, then discard the probe screenshot.
+    private func presentDirectCapturePermissionStep() {
+        clearChatHandlers()
+        chat.affordance = .onboardingNext
+        settings.onboardingStep = .directCapturePermission
+        settings.directCapturePermissionRequestPending = false
+        chat.show(
+            "One more permission: I need direct screen access so I can check your active window "
+                + "automatically without making you pick it every time. I take screenshots only "
+                + "— never audio — and keep them on this Mac. Click this bubble to grant it.",
+            autoHide: false
+        )
+        chat.onTap = { [weak self] in
+            self?.beginDirectCapturePermissionRequest()
+        }
+    }
+
+    private func beginDirectCapturePermissionRequest() {
+        settings.directCapturePermissionRequestPending = true
+        runDirectCapturePermissionRequest(clearPendingOnFailure: false)
+    }
+
+    private func resumeDirectCapturePermissionRequest() {
+        clearChatHandlers()
+        chat.show("Checking direct screen access…", autoHide: false)
+        runDirectCapturePermissionRequest(clearPendingOnFailure: true)
+    }
+
+    private func runDirectCapturePermissionRequest(clearPendingOnFailure: Bool) {
+        chat.onReply = nil
+        chat.onTap = nil
+        checkTask?.cancel()
+        checkTask = Task { [weak self] in
+            guard let self else { return }
+            let granted = await requestDirectCapturePermission()
+            guard !Task.isCancelled else { return }
+            if granted {
+                settings.directCapturePermissionRequestPending = false
+                Log.info("Direct screen capture permission works")
+                beginTestStep()
+            } else {
+                if clearPendingOnFailure {
+                    settings.directCapturePermissionRequestPending = false
+                }
+                presentDirectCapturePermissionRetry()
+            }
+        }
+    }
+
+    private func presentDirectCapturePermissionRetry() {
+        clearChatHandlers()
+        chat.affordance = .onboardingNext
+        chat.show(
+            "Direct screen access still isn't available. Approve Drill Sergeant in System "
+                + "Settings, then click this bubble to try again.",
+            autoHide: false
+        )
+        chat.onTap = { [weak self] in
+            self?.beginDirectCapturePermissionRequest()
+        }
+    }
+
     private func beginTestStep() {
         clearChatHandlers()
         settings.onboardingStep = .test
         settings.screenPermissionRequestPending = false
+        settings.directCapturePermissionRequestPending = false
         hasTriggeredTestCheck = false
         isRunningTestCheck = false
         chat.show("Getting the screen test ready…", autoHide: false)

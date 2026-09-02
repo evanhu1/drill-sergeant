@@ -9,4 +9,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.coordinator = coordinator
         coordinator.start()
     }
+
+    func applicationShouldTerminate(
+        _ sender: NSApplication
+    ) -> NSApplication.TerminateReply {
+        coordinator?.applicationShouldTerminate(
+            quitReason: TerminationReason.currentQuitReason
+        ) ?? .terminateNow
+    }
 }
