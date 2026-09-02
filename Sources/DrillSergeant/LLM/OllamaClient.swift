@@ -75,6 +75,18 @@ struct OllamaDecisionFailure: Error, Equatable {
 actor OllamaClient {
     var model: String
 
+    private enum KeepAlive {
+        case duration(String)
+        case unload
+
+        var payloadValue: Any {
+            switch self {
+            case let .duration(value): value
+            case .unload: 0
+            }
+        }
+    }
+
     private struct ChatResponse: Decodable {
         let message: OllamaMessage
         let evalCount: Int?
@@ -99,23 +111,32 @@ actor OllamaClient {
 
     private let baseURL: URL
     private let session: URLSession
+    private let runtimeProfile: RuntimeProfile
 
     init(
         baseURL: URL = URL(string: "http://127.0.0.1:11434")!,
-        model: String
+        model: String,
+        runtimeProfile: RuntimeProfile = .current
     ) {
         self.baseURL = baseURL
         self.model = model
+        self.runtimeProfile = runtimeProfile
         let configuration = URLSessionConfiguration.default
         configuration.timeoutIntervalForRequest = 120
         configuration.timeoutIntervalForResource = 120
         session = URLSession(configuration: configuration)
     }
 
-    init(baseURL: URL, model: String, session: URLSession) {
+    init(
+        baseURL: URL,
+        model: String,
+        session: URLSession,
+        runtimeProfile: RuntimeProfile = .current
+    ) {
         self.baseURL = baseURL
         self.model = model
         self.session = session
+        self.runtimeProfile = runtimeProfile
     }
 
     func isReachable() async -> Bool {
@@ -168,7 +189,8 @@ actor OllamaClient {
         do {
             let first = try await chat(
                 messages: messages,
-                tools: Decision.toolDefinitions
+                tools: Decision.toolDefinitions,
+                keepAlive: .duration(runtimeProfile.keepAlive)
             )
             rawResponses.append(first.rawResponse)
 
@@ -217,7 +239,10 @@ actor OllamaClient {
                 }
                 let followUp = try await chat(
                     messages: historyWithoutImages + conversationMessages,
-                    tools: nil
+                    tools: nil,
+                    keepAlive: runtimeProfile.unloadAfterDecision
+                        ? .unload
+                        : .duration(runtimeProfile.keepAlive)
                 )
                 rawResponses.append(followUp.rawResponse)
                 let content = followUp.response.message.content
@@ -235,6 +260,8 @@ actor OllamaClient {
                 sourceField = "followup.content"
                 evalCount = combined(first.response.evalCount, followUp.response.evalCount)
                 doneReason = followUp.response.doneReason ?? first.response.doneReason
+            } else if runtimeProfile.unloadAfterDecision {
+                await unloadModel()
             }
 
             let elapsed = Date().timeIntervalSince(startedAt)
@@ -286,7 +313,8 @@ actor OllamaClient {
 
     private func chat(
         messages: [OllamaMessage],
-        tools: [[String: Any]]?
+        tools: [[String: Any]]?,
+        keepAlive: KeepAlive
     ) async throws -> ChatExchange {
         let encodedMessages = try JSONEncoder().encode(messages)
         guard let messageObjects = try JSONSerialization.jsonObject(
@@ -302,9 +330,9 @@ actor OllamaClient {
             "think": "low",
             "options": [
                 "temperature": 0.2,
-                "num_ctx": 8192,
+                "num_ctx": runtimeProfile.contextTokens,
             ],
-            "keep_alive": "30m",
+            "keep_alive": keepAlive.payloadValue,
         ]
         if let tools {
             payload["tools"] = tools
@@ -359,6 +387,32 @@ actor OllamaClient {
             )
         }
         return ChatExchange(response: chat, rawResponse: rawResponse)
+    }
+
+    private func unloadModel() async {
+        let payload: [String: Any] = [
+            "model": model,
+            "stream": false,
+            "keep_alive": 0,
+        ]
+        guard let body = try? JSONSerialization.data(withJSONObject: payload) else {
+            Log.warn("Could not encode Ollama unload request")
+            return
+        }
+
+        var request = URLRequest(url: endpoint("api/generate"), timeoutInterval: 120)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = body
+
+        do {
+            let (_, response) = try await perform(request)
+            if !(200..<300).contains(response.statusCode) {
+                Log.warn("Ollama unload returned HTTP \(response.statusCode)")
+            }
+        } catch {
+            Log.warn("Ollama unload failed: \(error.localizedDescription)")
+        }
     }
 
     private func combined(_ first: Int?, _ second: Int?) -> Int? {

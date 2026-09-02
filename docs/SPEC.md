@@ -504,6 +504,7 @@ enum OnboardingStep: String, Codable { case welcome, goal, permission, relaunch,
 final class OnboardingFlow {
     init(chat: ChatPresenter, scheduler: Scheduler, settings: Settings, ollama: OllamaClient,
          relaunch: @escaping () -> Void, quit: @escaping () -> Void,
+         skip: @escaping () -> Void,
          runCheck: @escaping (CheckReason) async -> Decision?)
     var onFinished: (() -> Void)?
     func start()   // resumes from settings.onboardingStep
@@ -674,6 +675,8 @@ A small circular close button (14pt, `xmark` SF Symbol at 8pt, secondary label c
 closes the reply input, cancels auto-hide, and does not change companion state. It is always
 visible while the bubble is showing. During onboarding, the close callback is overridden to call
 the coordinator's normal `quit()` path, so X quits the app and clears pending permission markers.
+On the visible YouTube test prompt only, X calls `skipOnboarding()` instead and starts normal
+monitoring after hiding the test bubble.
 
 ### 14.3 Developer toolbar
 
@@ -1127,8 +1130,8 @@ dedicated `BubbleAffordance.click` state. In that state, the bottom-right hint r
 `Next →`, is always visible, uses dark ink at 72% opacity, and does not lighten on hover. It remains active while
 moving between tap-to-advance onboarding screens, and the whole bubble uses the macOS pointing-hand
 cursor. Progress and waiting messages use `.display`; specifically, `Let's test it, open up
-YouTube.` has neither a reply hint nor a next action. The standard `.reply` affordance returns when
-onboarding ends.
+YouTube.` has neither a reply hint nor a next action, and its X skips the test and completes
+onboarding. The standard `.reply` affordance returns when onboarding ends.
 
 The permission message begins `Now I need Screen Recording permission…`; it does not begin with
 `Good.` The state renderer includes `bubble-onboarding.png` for the dedicated welcome treatment.
@@ -1344,3 +1347,21 @@ return only the short final message without another tool call.
 Check traces show assistant content and the native function name/arguments separately. Failed
 traces preserve the raw HTTP response. The developer toolbar reports `tool_calls` or
 `followup.content` as the decision source.
+
+## 31. Eight-gigabyte memory mode (amends 4.2, 5.1, 17.1, and 24)
+
+Keep `qwen3-vl:8b` as the default and only installed model. When
+`ProcessInfo.processInfo.physicalMemory` is 8 GiB or less, automatically use a low-memory runtime
+profile:
+
+- Send `num_ctx: 4096` instead of 8192.
+- Scale the longest screenshot edge to 960 pixels instead of 1280.
+- Retain at most four conversation messages instead of twelve.
+- Use `keep_alive: "30s"` for the initial native-tool request. If a text follow-up is needed, send
+  `keep_alive: 0` on that final request; otherwise make a best-effort `/api/generate` request with
+  `keep_alive: 0` after accepting the decision. A failed unload must not discard a valid decision.
+
+The installer detects the same 8 GiB threshold and uses `launchctl setenv` to set
+`OLLAMA_FLASH_ATTENTION=1`, `OLLAMA_KV_CACHE_TYPE=q4_0`, `OLLAMA_NUM_PARALLEL=1`, and
+`OLLAMA_MAX_LOADED_MODELS=1` before starting Ollama. If Ollama was already running, tell the user to
+restart it once. These are global Ollama server settings for the current macOS login session.

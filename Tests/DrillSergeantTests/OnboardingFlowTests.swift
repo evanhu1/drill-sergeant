@@ -475,6 +475,32 @@ final class OnboardingFlowTests: XCTestCase {
         XCTAssertNotNil(chat.onClose)
     }
 
+    func testYouTubePromptCloseSkipsInsteadOfQuitting() async {
+        let (settings, defaults, suiteName) = makeSettings()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        settings.onboardingStep = .test
+        let chat = FakeChatPresenter()
+        var quitCount = 0
+        var skipCount = 0
+        let flow = makeFlow(
+            chat: chat,
+            scheduler: Scheduler(clock: TestClock()),
+            settings: settings,
+            quit: { quitCount += 1 },
+            skip: { skipCount += 1 }
+        )
+        flow.isOllamaReady = { true }
+        flow.isYouTubeOpen = { false }
+        flow.pollInterval = 0.001
+
+        flow.start()
+        await waitUntil { chat.lastShown?.text.contains("YouTube") == true }
+        chat.onClose?()
+
+        XCTAssertEqual(skipCount, 1)
+        XCTAssertEqual(quitCount, 0)
+    }
+
     func testIdleAfterTestMarksOnboardingDone() async {
         let (settings, defaults, suiteName) = makeSettings()
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -520,6 +546,7 @@ final class OnboardingFlowTests: XCTestCase {
         scheduler: Scheduler,
         settings: Settings,
         quit: @escaping () -> Void = {},
+        skip: @escaping () -> Void = {},
         runCheck: @escaping (CheckReason) async -> Decision? = { _ in nil }
     ) -> OnboardingFlow {
         OnboardingFlow(
@@ -529,6 +556,7 @@ final class OnboardingFlowTests: XCTestCase {
             ollama: OllamaClient(model: settings.model),
             relaunch: {},
             quit: quit,
+            skip: skip,
             runCheck: runCheck
         )
     }

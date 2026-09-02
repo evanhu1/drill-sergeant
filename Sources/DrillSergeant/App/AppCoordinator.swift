@@ -260,6 +260,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         settings.onboardingStep = .done
         onboarding?.start()
         onboarding = nil
+        chat?.hide()
         installReplyHandler()
         scheduler?.start()
     }
@@ -332,6 +333,7 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
             ollama: ollama,
             relaunch: { [weak self] in self?.relaunch() },
             quit: { [weak self] in self?.quit() },
+            skip: { [weak self] in self?.skipOnboarding() },
             runCheck: { [weak self] reason in
                 guard let self else { return nil }
                 return await self.enqueueCheck(reason)

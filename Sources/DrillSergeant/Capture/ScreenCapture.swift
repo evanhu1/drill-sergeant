@@ -76,7 +76,11 @@ enum ScreenCapture {
     ) async throws -> Screenshot {
         let width = max(1, Int(window.frame.width.rounded()))
         let height = max(1, Int(window.frame.height.rounded()))
-        let size = scaledSize(width: width, height: height)
+        let size = scaledSize(
+            width: width,
+            height: height,
+            maxEdge: RuntimeProfile.current.screenshotMaxEdge
+        )
         let configuration = configuration(for: size)
         let backgroundColor = CGColor(gray: 0, alpha: 1)
         configuration.backgroundColor = backgroundColor
@@ -104,7 +108,11 @@ enum ScreenCapture {
             display: display,
             excludingWindows: ownWindows
         )
-        let size = scaledSize(width: display.width, height: display.height)
+        let size = scaledSize(
+            width: display.width,
+            height: display.height,
+            maxEdge: RuntimeProfile.current.screenshotMaxEdge
+        )
         return try await screenshot(
             filter: filter,
             configuration: configuration(for: size),

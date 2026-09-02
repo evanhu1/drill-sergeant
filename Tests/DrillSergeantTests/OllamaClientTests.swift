@@ -34,6 +34,7 @@ final class OllamaClientTests: XCTestCase {
             XCTAssertNil(object["format"])
             XCTAssertEqual((object["tools"] as? [[String: Any]])?.count, 5)
             let options = try XCTUnwrap(object["options"] as? [String: Any])
+            XCTAssertEqual(options["num_ctx"] as? Int, 8_192)
             XCTAssertNil(options["num_predict"])
             return Self.response(
                 request: request,
@@ -122,6 +123,65 @@ final class OllamaClientTests: XCTestCase {
         XCTAssertEqual(decision.message, "")
     }
 
+    func testLowMemoryUsesSmallerContextAndUnloadsAfterSetIdle() async throws {
+        var requestCount = 0
+        MockURLProtocol.handler = { request in
+            requestCount += 1
+            let object = try Self.bodyObject(from: request)
+            if requestCount == 1 {
+                XCTAssertEqual(object["keep_alive"] as? String, "30s")
+                let options = try XCTUnwrap(object["options"] as? [String: Any])
+                XCTAssertEqual(options["num_ctx"] as? Int, 4_096)
+                return Self.response(
+                    request: request,
+                    body: #"{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"set_idle","arguments":{}}}]}}"#
+                )
+            }
+
+            XCTAssertEqual(request.url?.path, "/api/generate")
+            XCTAssertEqual(object["keep_alive"] as? Int, 0)
+            XCTAssertNil(object["messages"])
+            return Self.response(
+                request: request,
+                body: #"{"message":{"role":"assistant","content":""},"done":true}"#
+            )
+        }
+        let client = makeClient(runtimeProfile: .lowMemory)
+
+        let decision = try await client.decide(messages: [])
+
+        XCTAssertEqual(requestCount, 2)
+        XCTAssertEqual(decision.tool, .set_idle)
+    }
+
+    func testLowMemoryUnloadsOnFinalFollowUpRequest() async throws {
+        var requestCount = 0
+        MockURLProtocol.handler = { request in
+            requestCount += 1
+            let object = try Self.bodyObject(from: request)
+            if requestCount == 1 {
+                XCTAssertEqual(object["keep_alive"] as? String, "30s")
+                return Self.response(
+                    request: request,
+                    body: #"{"message":{"role":"assistant","content":"","tool_calls":[{"function":{"name":"set_angry","arguments":{}}}]}}"#
+                )
+            }
+
+            XCTAssertEqual(object["keep_alive"] as? Int, 0)
+            XCTAssertNil(object["tools"])
+            return Self.response(
+                request: request,
+                body: #"{"message":{"role":"assistant","content":"Back to work."}}"#
+            )
+        }
+        let client = makeClient(runtimeProfile: .lowMemory)
+
+        let decision = try await client.decide(messages: [])
+
+        XCTAssertEqual(requestCount, 2)
+        XCTAssertEqual(decision.message, "Back to work.")
+    }
+
     func testMissingNativeToolCallIsRejected() async {
         MockURLProtocol.handler = { request in
             Self.response(
@@ -167,14 +227,18 @@ final class OllamaClientTests: XCTestCase {
         }
     }
 
-    private func makeClient(model: String = "qwen3-vl:8b") -> OllamaClient {
+    private func makeClient(
+        model: String = "qwen3-vl:8b",
+        runtimeProfile: RuntimeProfile = .standard
+    ) -> OllamaClient {
         let configuration = URLSessionConfiguration.ephemeral
         configuration.protocolClasses = [MockURLProtocol.self]
         let session = URLSession(configuration: configuration)
         return OllamaClient(
             baseURL: URL(string: "http://ollama.test")!,
             model: model,
-            session: session
+            session: session,
+            runtimeProfile: runtimeProfile
         )
     }
 

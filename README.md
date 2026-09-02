@@ -23,6 +23,13 @@ until the distraction is gone.
 
 Nothing leaves your Mac. Screenshots and prompts are processed by Ollama on your machine.
 
+On Macs with 8 GB of memory, the app keeps the same `qwen3-vl:8b` model but automatically uses a
+4K context, 960-pixel screenshots, four-message history, and unloads the model after each complete
+decision. The installer also enables Ollama Flash Attention, Q4 KV-cache quantization, one parallel
+request, and one loaded model. If Ollama was already running during installation, restart it once
+for those server settings to take effect. These Ollama settings are global for the current login
+session.
+
 ## Requirements
 
 - Apple Silicon Mac
@@ -40,6 +47,15 @@ swift test
 
 Use `Scripts/run.sh --reset` to restart onboarding. Development overrides are `DS_MODEL`,
 `DS_INTERVAL_MINUTES`, `DS_OLLAMA_URL`, and `DS_RESET_ONBOARDING=1`.
+
+To apply the low-memory Ollama server settings manually, run the following and restart Ollama:
+
+```bash
+launchctl setenv OLLAMA_FLASH_ATTENTION 1
+launchctl setenv OLLAMA_KV_CACHE_TYPE q4_0
+launchctl setenv OLLAMA_NUM_PARALLEL 1
+launchctl setenv OLLAMA_MAX_LOADED_MODELS 1
+```
 
 ## Uninstall
 

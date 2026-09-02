@@ -38,6 +38,7 @@ final class OnboardingFlow {
     private let settings: Settings
     private let relaunchHandler: () -> Void
     private let quitHandler: () -> Void
+    private let skipHandler: () -> Void
     private let runCheck: (CheckReason) async -> Decision?
 
     private var pollingTask: Task<Void, Never>?
@@ -54,6 +55,7 @@ final class OnboardingFlow {
         ollama: OllamaClient,
         relaunch: @escaping () -> Void,
         quit: @escaping () -> Void,
+        skip: @escaping () -> Void,
         runCheck: @escaping (CheckReason) async -> Decision?
     ) {
         self.chat = chat
@@ -61,6 +63,7 @@ final class OnboardingFlow {
         self.settings = settings
         relaunchHandler = relaunch
         quitHandler = quit
+        skipHandler = skip
         self.runCheck = runCheck
         isOllamaReady = {
             guard await ollama.isReachable() else { return false }
@@ -353,6 +356,7 @@ final class OnboardingFlow {
         pollingTask = nil
         chat.onTap = nil
         chat.onReply = nil
+        chat.onClose = skipHandler
         chat.affordance = .display
         chat.show("Let's test it, open up YouTube.", autoHide: false)
         scheduler.enterWatching()

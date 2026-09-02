@@ -29,6 +29,17 @@ final class ConversationTests: XCTestCase {
         })
     }
 
+    func testLowMemoryProfileKeepsAtMostFourMessages() {
+        let conversation = Conversation(runtimeProfile: .lowMemory)
+        conversation.appendUser("one", image: nil)
+        conversation.appendModelExchange(nativeExchange(message: "one"))
+        conversation.appendUser("two", image: nil)
+        conversation.appendModelExchange(nativeExchange(message: "two"))
+
+        XCTAssertLessThanOrEqual(conversation.turns.count, 4)
+        XCTAssertNotEqual(conversation.turns.first?.role, "tool")
+    }
+
     func testHumanReplyAndReset() {
         let conversation = Conversation()
         let reply = "I am reading the docs"

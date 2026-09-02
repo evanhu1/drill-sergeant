@@ -4,6 +4,7 @@ set -euo pipefail
 readonly REPOSITORY_URL="https://github.com/evanhu1/drill-sergeant.git"
 readonly MINIMUM_MACOS_VERSION="14.0"
 readonly MINIMUM_OLLAMA_VERSION="0.12"
+readonly LOW_MEMORY_LIMIT_BYTES=8589934592
 
 progress() {
     printf '==> %s\n' "$1"
@@ -56,6 +57,24 @@ ollama_is_running() {
     curl -fsS "http://127.0.0.1:11434/api/tags" >/dev/null 2>&1
 }
 
+physical_memory_bytes() {
+    sysctl -n hw.memsize 2>/dev/null || printf '0\n'
+}
+
+configure_low_memory_ollama() {
+    progress "Configuring Ollama for an 8 GB Mac"
+    if launchctl setenv OLLAMA_FLASH_ATTENTION 1 \
+        && launchctl setenv OLLAMA_KV_CACHE_TYPE q4_0 \
+        && launchctl setenv OLLAMA_NUM_PARALLEL 1 \
+        && launchctl setenv OLLAMA_MAX_LOADED_MODELS 1; then
+        return 0
+    fi
+
+    printf '%s\n' \
+        'Could not set low-memory Ollama options. See the README for manual setup.' >&2
+    return 1
+}
+
 checkout_path() {
     local script_source="${BASH_SOURCE[0]:-}"
     local script_dir=""
@@ -82,6 +101,9 @@ main() {
     local app_source
     local ollama_ready=0
     local attempt
+    local memory_bytes
+    local low_memory_mode=0
+    local ollama_was_running=0
 
     progress "Checking Mac requirements"
     architecture="$(uname -m)"
@@ -95,6 +117,16 @@ main() {
         printf 'Drill Sergeant requires macOS 14 or newer. Found macOS %s.\n' \
             "${macos_version}" >&2
         exit 1
+    fi
+
+    memory_bytes="$(physical_memory_bytes)"
+    if [[ "${memory_bytes}" =~ ^[0-9]+$ ]] \
+        && ((memory_bytes <= LOW_MEMORY_LIMIT_BYTES)); then
+        low_memory_mode=1
+        if ollama_is_running; then
+            ollama_was_running=1
+        fi
+        configure_low_memory_ollama || true
     fi
 
     progress "Checking Xcode Command Line Tools"
@@ -179,6 +211,10 @@ main() {
 
     progress "Launching Drill Sergeant"
     open -n "/Applications/Drill Sergeant.app"
+    if [[ "${low_memory_mode}" -eq 1 && "${ollama_was_running}" -eq 1 ]]; then
+        printf '%s\n' \
+            'Restart Ollama once to activate Flash Attention and quantized KV cache.'
+    fi
     progress "Drill Sergeant is in your notch. Follow the chat bubble."
 }
 

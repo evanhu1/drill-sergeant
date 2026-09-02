@@ -7,8 +7,11 @@ final class Conversation {
 
     private let maxTurns: Int
 
-    init(maxTurns: Int = 12) {
-        self.maxTurns = max(1, maxTurns)
+    init(
+        maxTurns: Int? = nil,
+        runtimeProfile: RuntimeProfile = .current
+    ) {
+        self.maxTurns = max(1, maxTurns ?? runtimeProfile.conversationMaxTurns)
     }
 
     func appendUser(_ text: String, image: String?) {
