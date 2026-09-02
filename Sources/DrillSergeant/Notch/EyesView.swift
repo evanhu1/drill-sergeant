@@ -37,7 +37,6 @@ struct EyesView: View {
 
     private let scleraSize = CGSize(width: 22, height: 27)
     private let pupilSize = CGSize(width: 11, height: 13)
-    private let transitionAnimation = Animation.easeInOut(duration: 0.25)
 
     var body: some View {
         HStack(spacing: 5) {
@@ -48,11 +47,6 @@ struct EyesView: View {
         // Whole-face motion: the pair turns and leans toward the cursor.
         .rotationEffect(.degrees(headTilt))
         .offset(x: lean.x, y: lean.y)
-        .animation(transitionAnimation, value: model.state)
-        .animation(.easeOut(duration: 0.1), value: lookGaze)
-        .animation(.easeOut(duration: 0.18), value: baseGaze)
-        .animation(.easeInOut(duration: 0.2), value: lidDrop)
-        .animation(.easeOut(duration: 0.25), value: effectiveProximity)
         .task(id: model.state) {
             guard animationsEnabled else { return }
             await runBlinkLoopIfNeeded()

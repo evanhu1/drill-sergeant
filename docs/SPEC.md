@@ -651,8 +651,12 @@ Rules (owned by `NotchWindow`, which observes `EyesModel.state`):
 - `func setTrayPinned(_ pinned: Bool)`: while pinned (the chat bubble is visible), the tray stays
   extended. Unpinning restarts the 3s timer if idle.
 - `func setTrayExtended(_ extended: Bool, animated: Bool = true)` for dev tools.
-- Animation: `.easeInOut(duration: 0.5)`. The window frame does not change; only the content
-  offset animates, so right-click still works on the notch area while hidden.
+- Animation: ease-in-out over 0.5s, tweened frame by frame by `NotchWindow` rather than with a
+  SwiftUI animation. The eyes re-render ~30 times a second to track the cursor, and each of those
+  renders resolved their position to the animation's final value, so the eyes arrived at the
+  extended position while the black background was still sliding. Setting the offset explicitly
+  every frame keeps the whole tray in lockstep. The window frame does not change; only the content
+  offset moves, so right-click still works on the notch area while hidden.
 
 `BubbleWindow` gains `var onVisibilityChange: ((Bool) -> Void)?` fired when the bubble is shown or
 fully hidden. `AppCoordinator` wires it to `notchWindow.setTrayPinned`.

@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import SwiftUI
 
 @MainActor
 final class AppCoordinator: SchedulerDelegate, DevActions {
@@ -252,7 +253,9 @@ final class AppCoordinator: SchedulerDelegate, DevActions {
         from old: CompanionState
     ) {
         Log.info("State changed: \(old.rawValue) -> \(state.rawValue)")
-        eyesModel?.state = state
+        withAnimation(.easeInOut(duration: 0.25)) {
+            eyesModel?.state = state
+        }
 
         let wasOnboarding = onboarding != nil
         onboarding?.schedulerDidChange(to: state)

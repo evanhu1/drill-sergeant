@@ -5,6 +5,7 @@ import SwiftUI
 @MainActor
 final class NotchWindow: NSPanel {
     private static let panelHeight: CGFloat = 40
+    private static let trayDuration: TimeInterval = 0.5
 
     var onCheckNow: (() -> Void)?
     var onDeveloper: (() -> Void)?
@@ -16,6 +17,7 @@ final class NotchWindow: NSPanel {
     private let presentationModel: NotchPresentationModel
     private let hostingView: HoverTrackingHostingView<NotchPanelHost>
     private var stateCancellable: AnyCancellable?
+    private var trayTween: Task<Void, Never>?
 
     var geometry: NotchGeometry { detectedGeometry }
 
@@ -85,6 +87,7 @@ final class NotchWindow: NSPanel {
     }
 
     deinit {
+        trayTween?.cancel()
         NotificationCenter.default.removeObserver(self)
     }
 
@@ -127,16 +130,43 @@ final class NotchWindow: NSPanel {
     }
 
     private func setTrayOffset(extended: Bool, animated: Bool) {
-        let offset = extended ? 0 : Self.panelHeight
-        guard presentationModel.trayOffset != offset else { return }
+        let target = extended ? 0 : Self.panelHeight
+        trayTween?.cancel()
+        trayTween = nil
+        guard presentationModel.trayOffset != target else { return }
 
-        if animated {
-            withAnimation(.easeInOut(duration: 0.5)) {
-                presentationModel.trayOffset = offset
-            }
-        } else {
-            presentationModel.trayOffset = offset
+        guard animated else {
+            presentationModel.trayOffset = target
+            return
         }
+
+        let start = presentationModel.trayOffset
+        let duration = Self.trayDuration
+        let frame: UInt64 = 8_000_000 // 125fps, so the slide stays smooth on ProMotion
+
+        trayTween = Task { @MainActor [weak self] in
+            let began = Date()
+            while !Task.isCancelled {
+                let elapsed = Date().timeIntervalSince(began)
+                guard elapsed < duration else { break }
+                let progress = Self.easeInOut(CGFloat(elapsed / duration))
+                self?.presentationModel.trayOffset = start + (target - start) * progress
+                do {
+                    try await Task.sleep(nanoseconds: frame)
+                } catch {
+                    return
+                }
+            }
+            guard !Task.isCancelled else { return }
+            self?.presentationModel.trayOffset = target
+        }
+    }
+
+    private static func easeInOut(_ t: CGFloat) -> CGFloat {
+        let clamped = min(max(t, 0), 1)
+        return clamped < 0.5
+            ? 2 * clamped * clamped
+            : 1 - pow(-2 * clamped + 2, 2) / 2
     }
 
     private static func detectGeometry() -> NotchGeometry {
