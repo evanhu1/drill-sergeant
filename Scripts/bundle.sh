@@ -14,6 +14,7 @@ mkdir -p "${CONTENTS_PATH}/MacOS" "${CONTENTS_PATH}/Resources"
 cp ".build/arm64-apple-macosx/release/DrillSergeant" "${CONTENTS_PATH}/MacOS/DrillSergeant"
 cp "Scripts/Info.plist" "${CONTENTS_PATH}/Info.plist"
 printf 'APPL????' > "${CONTENTS_PATH}/PkgInfo"
-codesign --force --deep --sign - "${APP_PATH}"
+# --deep is a verification flag, not a signing one; Apple advises against signing with it.
+codesign --force --sign - "${APP_PATH}"
 
 printf '%s\n' "${APP_PATH}"

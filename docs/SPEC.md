@@ -1002,3 +1002,37 @@ opens. Showing a new message restarts the timer, which resets the ring to full.
 The ring reads the clock through a `TimelineView`, never a SwiftUI animation: the bubble
 re-renders on hover and on every keystroke, and an animated trim would snap to empty. `BubbleView`
 takes a `staticCountdown` fraction for renders; `bubble-countdown.png` shows it at 0.65.
+
+## 22. Permission is confirmed by doing, not by asking (amends 3.1, 8, 10.2)
+
+`CGPreflightScreenCaptureAccess()` answers for the *responsible process*, not for this build. A
+binary launched from a terminal inherits the terminal's grant, so preflight returns true for an app
+that has never been granted anything, and the onboarding permission step used to delete itself.
+
+```swift
+enum ScreenPermission {
+    static func isGranted() -> Bool        // preflight; a hint, not an answer
+    static func probe() async -> Bool      // fetches shareable content and throws it away
+    static func request() -> Bool
+    static func openSystemSettings()
+}
+```
+
+`probe()` is the trustworthy answer: it succeeds only when capture actually works in this process.
+On a first run it is also what raises the system prompt.
+
+The permission step is **always shown** and nothing is requested until the user taps the bubble.
+On tap:
+
+1. Probe. If capture already works, go straight to `.test`. No relaunch is needed, because a
+   process that can capture now does not need restarting.
+2. Otherwise call `request()` to raise the prompt, and on a second tap with no grant recorded,
+   open System Settings.
+3. Then poll every `pollInterval`: probe true → `.test`; probe false but preflight true → the grant
+   is recorded but unusable in this process, which is the case a relaunch fixes → `.relaunch`.
+
+Resuming at `.relaunch` shows the restart bubble and probes once in the background, so an app that
+was already restarted moves on without a second click.
+
+`Scripts/bundle.sh` signs with `codesign --force --sign -`. `--deep` is a verification flag, and
+Apple advises against signing with it.

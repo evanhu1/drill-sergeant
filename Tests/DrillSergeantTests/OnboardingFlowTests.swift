@@ -48,33 +48,94 @@ final class OnboardingFlowTests: XCTestCase {
         XCTAssertFalse(resumedChat.shownMessages.contains { $0.text.contains("Drill Sergeant reporting") })
     }
 
-    func testPermissionStepSkipsWhenAlreadyGranted() async {
+    /// The step used to disappear whenever `isPermissionGranted()` said yes, which is exactly what
+    /// an inherited grant reports. It is always shown now, and nothing is asked for until a tap.
+    func testPermissionStepIsShownEvenWhenPreflightSaysGranted() async {
         let (settings, defaults, suiteName) = makeSettings()
         defer { defaults.removePersistentDomain(forName: suiteName) }
         settings.onboardingStep = .permission
         let chat = FakeChatPresenter()
-        let scheduler = Scheduler(clock: TestClock())
-        var checkReasons: [CheckReason] = []
+        var didRequest = false
         let flow = makeFlow(
             chat: chat,
-            scheduler: scheduler,
-            settings: settings,
-            runCheck: { reason in
-                checkReasons.append(reason)
-                return Decision(tool: .set_idle, snoozeMinutes: nil, message: "")
-            }
+            scheduler: Scheduler(clock: TestClock()),
+            settings: settings
         )
         flow.isPermissionGranted = { true }
-        flow.isOllamaReady = { true }
-        flow.isYouTubeOpen = { true }
+        flow.probePermission = { true }
+        flow.requestPermission = { didRequest = true; return true }
         flow.pollInterval = 0.001
 
         flow.start()
 
-        XCTAssertEqual(settings.onboardingStep, .test)
-        XCTAssertFalse(chat.shownMessages.contains { $0.text.contains("Screen Recording") })
-        await waitUntil { checkReasons.count == 1 }
-        flow.schedulerDidChange(to: .idle)
+        XCTAssertTrue(chat.shownMessages.contains { $0.text.contains("Screen Recording") })
+        XCTAssertEqual(settings.onboardingStep, .permission)
+        XCTAssertFalse(didRequest)
+    }
+
+    func testTapAdvancesWithoutRelaunchWhenCaptureAlreadyWorks() async {
+        let (settings, defaults, suiteName) = makeSettings()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        settings.onboardingStep = .permission
+        let chat = FakeChatPresenter()
+        let flow = makeFlow(
+            chat: chat,
+            scheduler: Scheduler(clock: TestClock()),
+            settings: settings
+        )
+        flow.isPermissionGranted = { true }
+        flow.probePermission = { true }
+        flow.isOllamaReady = { false }
+        flow.pollInterval = 0.001
+
+        flow.start()
+        chat.onTap?()
+
+        await waitUntil { settings.onboardingStep == .test }
+        XCTAssertFalse(chat.shownMessages.contains { $0.text.contains("restart") })
+    }
+
+    /// Recorded by macOS but not usable by this process yet: that is the case a relaunch fixes.
+    func testGrantedButNotYetWorkingAsksForARelaunch() async {
+        let (settings, defaults, suiteName) = makeSettings()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        settings.onboardingStep = .permission
+        let chat = FakeChatPresenter()
+        let flow = makeFlow(
+            chat: chat,
+            scheduler: Scheduler(clock: TestClock()),
+            settings: settings
+        )
+        var granted = false
+        flow.isPermissionGranted = { granted }
+        flow.probePermission = { false }
+        flow.requestPermission = { granted = true; return true }
+        flow.pollInterval = 0.001
+
+        flow.start()
+        chat.onTap?()
+
+        await waitUntil { settings.onboardingStep == .relaunch }
+        XCTAssertTrue(chat.shownMessages.contains { $0.text.contains("restart") })
+    }
+
+    func testRelaunchStepMovesOnOnceCaptureWorks() async {
+        let (settings, defaults, suiteName) = makeSettings()
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        settings.onboardingStep = .relaunch
+        let chat = FakeChatPresenter()
+        let flow = makeFlow(
+            chat: chat,
+            scheduler: Scheduler(clock: TestClock()),
+            settings: settings
+        )
+        flow.probePermission = { true }
+        flow.isOllamaReady = { false }
+        flow.pollInterval = 0.001
+
+        flow.start()
+
+        await waitUntil { settings.onboardingStep == .test }
     }
 
     func testYouTubeDetectionRunsOnboardingCheck() async {

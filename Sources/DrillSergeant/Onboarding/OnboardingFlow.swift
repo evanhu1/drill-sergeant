@@ -13,6 +13,7 @@ final class OnboardingFlow {
     var onFinished: (() -> Void)?
 
     var isPermissionGranted: () -> Bool = ScreenPermission.isGranted
+    var probePermission: () async -> Bool = ScreenPermission.probe
     var requestPermission: () -> Bool = ScreenPermission.request
     var openPermissionSettings: () -> Void = ScreenPermission.openSystemSettings
     var isYouTubeOpen: () -> Bool = {
@@ -64,11 +65,8 @@ final class OnboardingFlow {
         case .permission:
             beginPermissionStep()
         case .relaunch:
-            if isPermissionGranted() {
-                beginTestStep()
-            } else {
-                presentRelaunchStep()
-            }
+            presentRelaunchStep()
+            confirmRelaunchNotNeeded()
         case .test:
             beginTestStep()
         case .done:
@@ -97,13 +95,10 @@ final class OnboardingFlow {
         }
     }
 
+    /// The step is always shown. Skipping it on `isPermissionGranted()` meant it silently
+    /// vanished whenever the grant was inherited rather than this build's own.
     private func beginPermissionStep() {
         clearChatHandlers()
-        if isPermissionGranted() {
-            beginTestStep()
-            return
-        }
-
         settings.onboardingStep = .permission
         permissionRequestAttempts = 0
         chat.show(
@@ -114,38 +109,74 @@ final class OnboardingFlow {
         chat.onTap = { [weak self] in
             self?.requestScreenPermission()
         }
-        startPermissionPolling()
     }
 
+    /// Nothing is asked for until the user presses the bubble.
     private func requestScreenPermission() {
         permissionRequestAttempts += 1
-        if requestPermission() || isPermissionGranted() {
-            permissionDidBecomeGranted()
-        } else if permissionRequestAttempts >= 2 {
-            openPermissionSettings()
+        let attempt = permissionRequestAttempts
+        checkTask?.cancel()
+        checkTask = Task { [weak self] in
+            guard let self else { return }
+            if await probePermission() {
+                // Capture works in this process, so there is nothing to restart for.
+                permissionIsWorking()
+                return
+            }
+            _ = requestPermission()
+            guard !Task.isCancelled else { return }
+            if attempt >= 2, !isPermissionGranted() {
+                openPermissionSettings()
+            }
+            startPermissionPolling()
         }
     }
 
+    /// After the prompt, watch for the answer. A grant that macOS has recorded but that capture
+    /// cannot use yet is the case that needs a relaunch.
     private func startPermissionPolling() {
         pollingTask?.cancel()
-        let checkPermission = isPermissionGranted
         let interval = pollInterval
         pollingTask = Task { [weak self] in
             while !Task.isCancelled {
                 guard await Self.sleep(for: interval) else { return }
-                guard checkPermission() else { continue }
-                self?.permissionDidBecomeGranted()
-                return
+                guard let self else { return }
+                if await probePermission() {
+                    permissionIsWorking()
+                    return
+                }
+                if isPermissionGranted() {
+                    permissionNeedsRelaunch()
+                    return
+                }
             }
         }
     }
 
-    private func permissionDidBecomeGranted() {
+    private func permissionIsWorking() {
+        guard settings.onboardingStep == .permission
+            || settings.onboardingStep == .relaunch else { return }
+        pollingTask?.cancel()
+        pollingTask = nil
+        beginTestStep()
+    }
+
+    private func permissionNeedsRelaunch() {
         guard settings.onboardingStep == .permission else { return }
         pollingTask?.cancel()
         pollingTask = nil
         settings.onboardingStep = .relaunch
         presentRelaunchStep()
+    }
+
+    /// A relaunch that already happened: if capture works, move on without another click.
+    private func confirmRelaunchNotNeeded() {
+        checkTask?.cancel()
+        checkTask = Task { [weak self] in
+            guard let self, await probePermission() else { return }
+            guard !Task.isCancelled else { return }
+            permissionIsWorking()
+        }
     }
 
     private func presentRelaunchStep() {
