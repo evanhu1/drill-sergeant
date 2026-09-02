@@ -27,17 +27,21 @@ struct EyesView: View {
     /// Static inputs for renders. When set they replace the live, timed behaviour.
     var proximity: CGFloat? = nil
     var attention: EyeAttention? = nil
+    var angryProgress: CGFloat? = nil
+    var smileProgress: CGFloat? = nil
 
     @State private var happyScale: CGFloat = 1
-    @State private var saccade: CGPoint = .zero
     @State private var isGlancing = false
 
     /// Wider than tall, so the eye reads almond rather than egg.
     private let scleraSize = CGSize(width: 24, height: 23)
     /// A cat's vertical slit. Narrow enough to travel sideways, tall enough that it barely can
     /// travel up or down, which is what `pupilTravel` accounts for.
-    private let pupilSize = CGSize(width: 7, height: 16)
-    private let pupilTravel = CGSize(width: 6, height: 2)
+    private let pupilSize = CGSize(width: 7, height: 15)
+    private let pupilTravel = CGSize(width: 6, height: 5)
+    /// Thickness of the smile arc at its middle, and how far it sits below the open eye's centre.
+    private let smileArc: CGFloat = 6
+    private let smileDrop: CGFloat = 7
 
     var body: some View {
         HStack(spacing: 5) {
@@ -56,10 +60,6 @@ struct EyesView: View {
             guard animationsEnabled else { return }
             await runStateAccent()
         }
-        .task(id: model.state) {
-            guard animationsEnabled else { return }
-            await runSaccadesIfNeeded()
-        }
         .task(id: model.attention) {
             guard animationsEnabled else { return }
             await runGlance()
@@ -72,25 +72,9 @@ struct EyesView: View {
     }
 
     private func eye(_ side: EyeSide) -> some View {
-        ZStack {
-            standardEye(side)
-                .scaleEffect(x: 1, y: model.state == .happy ? 0.08 : 1)
-                .opacity(model.state == .happy ? 0 : 1)
-
-            HappyEyeArc()
-                .stroke(
-                    cream,
-                    style: StrokeStyle(
-                        lineWidth: 3.5,
-                        lineCap: .round,
-                        lineJoin: .round
-                    )
-                )
-                .frame(width: scleraSize.width, height: 14)
-                .scaleEffect((model.state == .happy ? 1 : 0.75) * happyScale)
-                .opacity(model.state == .happy ? 1 : 0)
-        }
-        .frame(width: scleraSize.width, height: scleraSize.height)
+        standardEye(side)
+            .scaleEffect(happyScale)
+            .frame(width: scleraSize.width, height: scleraSize.height)
     }
 
     private func standardEye(_ side: EyeSide) -> some View {
@@ -108,19 +92,28 @@ struct EyesView: View {
                     x: lookGaze.x * pupilTravel.width + convergence(for: side),
                     y: lookGaze.y * pupilTravel.height
                 )
+                // A pupil left showing inside the smile arc reads as a stare, not a smile.
+                .opacity(pupilOpacity)
         }
         .frame(width: scleraSize.width, height: scleraSize.height)
         .clipShape(Ellipse())
         .clipShape(lidClip(for: side))
         .clipShape(EyelidClip(progress: eyelidProgress))
+        .clipShape(SmileCrescent(shift: smileShift), style: FillStyle(eoFill: true))
+        .offset(y: smileAmount * smileDrop)
         .scaleEffect(scleraScale)
     }
 
     private func lidClip(for side: EyeSide) -> AngryLidClip {
         AngryLidClip(
             side: side == .left ? .left : .right,
-            progress: model.state == .angry ? 1 : 0
+            progress: angryProgress ?? (model.state == .angry ? 1 : 0)
         )
+    }
+
+    /// How far the eye has closed into its smile arc.
+    private var smileAmount: CGFloat {
+        (smileProgress ?? (model.state == .happy ? 1 : 0)).clamped(to: 0 ... 1)
     }
 
     // MARK: - Where the eyes look
@@ -134,15 +127,12 @@ struct EyesView: View {
         )
     }
 
-    /// Final pupil direction after the glance and saccade are layered on.
+    /// Final pupil direction, after a glance at the bubble takes over from the cursor.
     private var lookGaze: CGPoint {
         if glancingAtBubble {
             return CGPoint(x: 0, y: 0.95)
         }
-        return CGPoint(
-            x: (baseGaze.x + saccade.x).clamped(to: -1 ... 1),
-            y: (baseGaze.y + saccade.y).clamped(to: -1 ... 1)
-        )
+        return baseGaze
     }
 
     private var glancingAtBubble: Bool {
@@ -180,6 +170,16 @@ struct EyesView: View {
         blinkAmount
     }
 
+    /// The cutter starts a whole eye-height below, where it removes nothing, and rises until only
+    /// `smileArc` points of eye are left.
+    private var smileShift: CGFloat {
+        scleraSize.height - (scleraSize.height - smileArc) * smileAmount
+    }
+
+    private var pupilOpacity: CGFloat {
+        max(0, 1 - smileAmount * 1.6)
+    }
+
     private var scleraScale: CGFloat {
         model.state == .watching ? 1.08 : 1
     }
@@ -195,12 +195,13 @@ struct EyesView: View {
         }
     }
 
+    /// A cool off-white rather than a warm cream: warmth reads friendly.
     private var cream: Color {
-        Color(red: 251 / 255, green: 238 / 255, blue: 227 / 255)
+        Color(red: 232 / 255, green: 234 / 255, blue: 238 / 255)
     }
 
     private var iris: Color {
-        Color(red: 107 / 255, green: 120 / 255, blue: 230 / 255)
+        Color(red: 62 / 255, green: 74 / 255, blue: 96 / 255)
     }
 
     // MARK: - Timed behaviour
@@ -239,34 +240,6 @@ struct EyesView: View {
         model.state == .watching
             ? Double.random(in: 6 ... 10)
             : Double.random(in: 3 ... 6)
-    }
-
-    /// Small, quick flicks of the pupils while idle, so tracking never looks mechanical.
-    private func runSaccadesIfNeeded() async {
-        saccade = .zero
-        guard model.state == .idle else { return }
-
-        while !Task.isCancelled, model.state == .idle {
-            do {
-                try await sleep(seconds: Double.random(in: 2 ... 5))
-                guard !Task.isCancelled, model.state == .idle, !isGlancing else { continue }
-
-                withAnimation(.easeOut(duration: 0.06)) {
-                    saccade = CGPoint(
-                        x: CGFloat.random(in: -0.35 ... 0.35),
-                        y: CGFloat.random(in: -0.2 ... 0.2)
-                    )
-                }
-                try await sleep(seconds: Double.random(in: 0.12 ... 0.2))
-                withAnimation(.easeOut(duration: 0.08)) {
-                    saccade = .zero
-                }
-            } catch {
-                saccade = .zero
-                return
-            }
-        }
-        saccade = .zero
     }
 
     /// A new message pulls the eyes down to the bubble briefly. Typing holds them there.
@@ -358,24 +331,6 @@ private struct AngryLidClip: Shape {
     }
 }
 
-private struct HappyEyeArc: Shape {
-    func path(in rect: CGRect) -> Path {
-        var path = Path()
-        path.move(to: CGPoint(x: rect.minX, y: rect.maxY * 0.82))
-        path.addCurve(
-            to: CGPoint(x: rect.midX, y: rect.minY),
-            control1: CGPoint(x: rect.minX + rect.width * 0.18, y: rect.height * 0.42),
-            control2: CGPoint(x: rect.midX - rect.width * 0.18, y: rect.minY)
-        )
-        path.addCurve(
-            to: CGPoint(x: rect.maxX, y: rect.maxY * 0.82),
-            control1: CGPoint(x: rect.midX + rect.width * 0.18, y: rect.minY),
-            control2: CGPoint(x: rect.maxX - rect.width * 0.18, y: rect.height * 0.42)
-        )
-        return path
-    }
-}
-
 private extension CGFloat {
     func clamped(to range: ClosedRange<CGFloat>) -> CGFloat {
         Swift.min(Swift.max(self, range.lowerBound), range.upperBound)
@@ -408,6 +363,27 @@ private struct EyelidClip: Shape {
         path.addLine(to: CGPoint(x: rect.maxX, y: rect.maxY))
         path.addLine(to: CGPoint(x: rect.minX, y: rect.maxY))
         path.closeSubpath()
+        return path
+    }
+}
+
+/// Cuts the eye with a copy of its own ellipse sitting below it, leaving a crescent whose outer
+/// edge is the eye's own silhouette. The smile is therefore the same eye, not a second shape.
+///
+/// The cutter is used as a hole in a large rectangle rather than as a second ellipse in an
+/// even-odd pair: an even-odd pair leaves a filled region below the eye whose edge coincides with
+/// the eye's own, and the two anti-aliased edges leave a pale seam along the bottom.
+private struct SmileCrescent: Shape {
+    var shift: CGFloat
+
+    var animatableData: CGFloat {
+        get { shift }
+        set { shift = newValue }
+    }
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path(rect.insetBy(dx: -rect.width, dy: -rect.height))
+        path.addPath(Path(ellipseIn: rect.offsetBy(dx: 0, dy: shift)))
         return path
     }
 }

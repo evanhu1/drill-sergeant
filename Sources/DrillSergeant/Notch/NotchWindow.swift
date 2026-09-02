@@ -10,6 +10,7 @@ final class NotchWindow: NSPanel {
     var onCheckNow: (() -> Void)?
     var onDeveloper: (() -> Void)?
     var onQuit: (() -> Void)?
+    var onTrayExtensionChange: ((Bool) -> Void)?
 
     private let eyesModel: EyesModel
     private var detectedGeometry: NotchGeometry
@@ -20,6 +21,7 @@ final class NotchWindow: NSPanel {
     private var trayTween: Task<Void, Never>?
 
     var geometry: NotchGeometry { detectedGeometry }
+    var isTrayExtended: Bool { trayController.isExtended }
 
     init(eyesModel: EyesModel) {
         let geometry = Self.detectGeometry()
@@ -69,7 +71,9 @@ final class NotchWindow: NSPanel {
         contentView = hostingView
 
         trayController.onExtensionChange = { [weak self] extended in
-            self?.setTrayOffset(extended: extended, animated: true)
+            guard let self else { return }
+            self.setTrayOffset(extended: extended, animated: true)
+            self.onTrayExtensionChange?(extended)
         }
         hostingView.onHoverChange = { [weak trayController] hovering in
             trayController?.setHovering(hovering)
@@ -263,6 +267,8 @@ struct NotchPanelContent: View {
     var animationsEnabled = true
     var proximity: CGFloat? = nil
     var attention: EyeAttention? = nil
+    var angryProgress: CGFloat? = nil
+    var smileProgress: CGFloat? = nil
 
     var body: some View {
         ZStack(alignment: .top) {
@@ -283,7 +289,9 @@ struct NotchPanelContent: View {
                     gaze: gaze,
                     animationsEnabled: animationsEnabled,
                     proximity: proximity,
-                    attention: attention
+                    attention: attention,
+                    angryProgress: angryProgress,
+                    smileProgress: smileProgress
                 )
                 .frame(height: panelHeight)
             }

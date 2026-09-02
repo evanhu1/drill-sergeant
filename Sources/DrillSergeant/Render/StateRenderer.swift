@@ -105,6 +105,25 @@ enum StateRenderer {
             rendered: &rendered
         )
 
+        try renderStrip(
+            name: "transition-angry-to-happy.png",
+            frames: (0...4).map { step in
+                let t = CGFloat(step) / 4
+                return (angry: 1 - t, smile: t)
+            },
+            outputURL: outputURL,
+            rendered: &rendered
+        )
+        try renderStrip(
+            name: "transition-happy-to-idle.png",
+            frames: (0...4).map { step in
+                let t = CGFloat(step) / 4
+                return (angry: 0, smile: 1 - t)
+            },
+            outputURL: outputURL,
+            rendered: &rendered
+        )
+
         try renderBubble(
             name: "bubble.png",
             inputOpen: false,
@@ -150,6 +169,8 @@ enum StateRenderer {
         trayOffset: CGFloat = 0,
         proximity: CGFloat? = nil,
         attention: EyeAttention? = nil,
+        angryProgress: CGFloat? = nil,
+        smileProgress: CGFloat? = nil,
         outputURL: URL,
         rendered: inout [(name: String, image: NSImage)]
     ) throws {
@@ -166,12 +187,48 @@ enum StateRenderer {
                 gaze: gaze,
                 animationsEnabled: false,
                 proximity: proximity,
-                attention: attention
+                attention: attention,
+                angryProgress: angryProgress,
+                smileProgress: smileProgress
             )
         }
         .frame(width: notchSize.width, height: notchSize.height)
 
         let image = try image(view, size: notchSize)
+        try writePNG(image, to: outputURL.appendingPathComponent(name))
+        rendered.append((name, image))
+    }
+
+    /// A filmstrip of one transition, so the shape can be checked part-way through.
+    private static func renderStrip(
+        name: String,
+        frames: [(angry: CGFloat, smile: CGFloat)],
+        outputURL: URL,
+        rendered: inout [(name: String, image: NSImage)]
+    ) throws {
+        let model = EyesModel()
+        model.state = .idle
+        let strip = HStack(spacing: 6) {
+            ForEach(frames.indices, id: \.self) { index in
+                ZStack {
+                    background
+                    NotchPanelContent(
+                        model: model,
+                        notchHeight: 32,
+                        panelHeight: 40,
+                        animationsEnabled: false,
+                        angryProgress: frames[index].angry,
+                        smileProgress: frames[index].smile
+                    )
+                }
+                .frame(width: notchSize.width, height: notchSize.height)
+            }
+        }
+        let size = CGSize(
+            width: notchSize.width * CGFloat(frames.count) + 6 * CGFloat(frames.count - 1),
+            height: notchSize.height
+        )
+        let image = try self.image(strip, size: size)
         try writePNG(image, to: outputURL.appendingPathComponent(name))
         rendered.append((name, image))
     }

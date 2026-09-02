@@ -742,15 +742,17 @@ periwinkle-blue pupil. The pupil is what expresses; there are no eyebrows in any
 
 Geometry (points, in a tray of `panelHeight = 40`; update the NotchWindow, BubbleWindow default, and
 renderer to 40):
-- Sclera: ellipse 24 wide × 23 tall, fill `#FBEEE3`, level. Wider than tall reads almond rather
+- Sclera: ellipse 24 wide × 23 tall, fill `#E8EAEE`, a cool off-white, level. Wider than tall reads almond rather
   than egg, and any rotation drops an outer top corner, which reads as sadness. Gap between eyes 5pt. Pair centered horizontally, vertically centered
   in the tray with 4pt clearance to the tray's bottom edge.
-- Pupil: a cat's vertical slit, ellipse 7 × 16, fill `#6B78E6`, clipped to the sclera, centred.
+- Pupil: a cat's vertical slit, ellipse 7 × 15, fill `#3E4A60`, slate, clipped to the sclera, centred.
 - Pupil gaze travel: ±6pt x, ±2pt y. A tall slit in a short eye has almost no vertical room, so the
   gaze reads sideways, like a cat's.
 
 Gaze (all states except happy and mid-blink):
-- `CursorTracker` runs **always** while the app is alive (30Hz polling), not only in watching/angry.
+- `CursorTracker` runs at 30Hz while the notch tray is extended and stops as soon as the tray
+  begins retracting. It resumes when state, pinning, hover, or developer controls extend the tray,
+  preserving live gaze whenever the eyes are visible without polling throughout hidden idle time.
 - Mapping: vector from the panel center to the mouse in screen points, divided by (screenWidth/2,
   screenHeight/2) → v in [-1,1]². Apply `sign(v) * pow(|v|, 0.55)` per axis so mid-screen cursor
   positions already move the pupil most of the way, then multiply by max travel. Screen y is flipped
@@ -768,8 +770,11 @@ States:
   shape whose top edge runs from the **outer** top corner at 22% of the eye height down to the
   **inner** corner at 52% of the eye height (lids slant down toward the nose). Pupil scales to 0.9.
   No red tint, no brow, and no shake: the angry eyes hold still and stare.
-- **happy**: sclera collapses into an upward arc: render a 3.5pt-thick cream arc (the top half of
-  the sclera outline, ends slightly flared), no pupil. Bounce on entry (scale 1.15 → 1.0, 0.3s).
+- **happy**: the eye closes into a crescent by being cut with a copy of its own ellipse rising from
+  below, so the arc's outer edge is the eye's silhouette and the smile is the same eye rather than a
+  second shape. 6pt thick at the middle, dropped 7pt so it sits where the open eye's centre was.
+  The pupil fades out over the first 60% of the close, since a pupil showing inside the arc reads as
+  a stare. Bounce on entry (scale 1.15 → 1.0, 0.3s).
 - Tray hidden: nothing visible (unchanged).
 
 Renders (14.4): add `angry-gaze-left.png` (gaze (-0.8, 0.1)) and `idle-gaze-down.png`
@@ -820,7 +825,8 @@ Rules:
 
 ### 17.2 Onboarding without a goal (replaces step 1 of section 8)
 
-`OnboardingStep` becomes `welcome, permission, relaunch, test, done`.
+`OnboardingStep` becomes
+`welcome, permission, relaunch, directCapturePermission, test, done`.
 
 Step **welcome** shows, and does not auto-hide:
 
@@ -977,8 +983,6 @@ toolbar with an "Open trace folder" button that reveals the directory in Finder.
 Seven behaviours layered on the section 15 design. All are driven from `EyesView` and `EyesModel`;
 the coordinator only reports what the user is doing.
 
-- **Saccades** (idle only): every 2–5s the pupils flick by up to ±0.35 x / ±0.2 y of gaze range
-  for 120–200ms, then return. Skipped while glancing at the bubble.
 - **Convergence**: `EyesModel.proximity` is 1 when the cursor is within 60pt of the panel centre,
   fading to 0 at 360pt. Each pupil shifts inward by `1.6pt × proximity`.
 - **Glance at the bubble**: `EyesModel.attention` is `.bubble` when a message appears (eyes look
@@ -1019,18 +1023,21 @@ enum ScreenPermission {
 }
 ```
 
-`probe()` is the trustworthy answer: it succeeds only when capture actually works in this process.
-On a first run it is also what raises the system prompt.
+`probe()` confirms that this process can enumerate shareable screen content. On a first run it is
+also what raises the initial Screen Recording prompt. macOS can require a second consent before
+`SCScreenshotManager` may capture directly without the system window picker; section 27 places
+that request in its own explicit onboarding step.
 
 The permission step is **always shown** and nothing is requested until the user taps the bubble.
 On tap:
 
-1. Probe. If capture already works, go straight to `.test`. No relaunch is needed, because a
-   process that can capture now does not need restarting.
+1. Probe. If shareable content is available, go straight to `.directCapturePermission`. No
+   relaunch is needed, because this process can use the initial grant now.
 2. Otherwise call `request()` to raise the prompt, and on a second tap with no grant recorded,
    open System Settings.
-3. Then poll every `pollInterval`: probe true → `.test`; probe false but preflight true → the grant
-   is recorded but unusable in this process, which is the case a relaunch fixes → `.relaunch`.
+3. Then poll every `pollInterval`: probe true → `.directCapturePermission`; probe false but
+   preflight true → the grant is recorded but unusable in this process, which is the case a
+   relaunch fixes → `.relaunch`.
 
 Resuming at `.relaunch` shows the restart bubble and probes once in the background, so an app that
 was already restarted moves on without a second click.
@@ -1091,21 +1098,160 @@ Before invoking the system Screen Recording request, persist
 the process directly from its permission UI, before the normal polling loop records `.relaunch`.
 
 On the replacement launch, show `Checking Screen Recording permission…` immediately so the bubble
-and pinned tray are visible while `ScreenPermission.probe()` resolves. A successful onboarding
-probe advances to `.test`; a successful post-onboarding probe resumes the scheduler and briefly
-shows `Permission granted. I'm back on watch.` A denied request returns to the permission prompt.
-If preflight says the grant exists but the probe still fails, retain the restart action.
+and pinned tray are visible while `ScreenPermission.probe()` resolves. Retry the probe five times
+at the normal two-second polling interval so launch does not mistake TCC propagation latency for a
+denial. A successful onboarding probe advances to `.directCapturePermission`; a successful
+post-onboarding probe resumes the scheduler and briefly shows `Permission granted. I'm back on
+watch.` A denied request returns to the permission prompt only after the retry window. If preflight
+says the grant exists but the probe still fails, retain the restart action.
 
 The `.test` step also presents `Getting the screen test ready…` before checking Ollama, so every
 persisted onboarding state has visible UI synchronously at launch. Relaunches must not inherit the
 one-shot `DS_RESET_ONBOARDING` override.
 
-## 26. Welcome onboarding affordance
+## 26. Tap-to-advance onboarding affordance
 
-The welcome bubble uses a dedicated `BubbleAffordance.onboardingNext` state. In that state, the
-bottom-right hint reads `Next →`, is always visible, uses dark ink at 72% opacity, and does not
-lighten on hover. The standard `reply ←` affordance remains hover-only everywhere else. Advancing
-from welcome resets the affordance to `.reply`.
+The welcome, Screen Recording permission, restart, and direct-capture permission bubbles use a
+dedicated `BubbleAffordance.onboardingNext` state. In that state, the bottom-right hint reads
+`Next →`, is always visible, uses dark ink at 72% opacity, and does not lighten on hover. It remains active while
+moving between tap-to-advance onboarding screens, and the whole bubble uses the macOS pointing-hand
+cursor. The standard `reply ←` affordance and arrow cursor return only when the flow reaches a
+screen that accepts typed input, or when onboarding ends.
 
 The permission message begins `Now I need Screen Recording permission…`; it does not begin with
 `Good.` The state renderer includes `bubble-onboarding.png` for the dedicated welcome treatment.
+
+## 27. Direct-capture permission before the YouTube test
+
+macOS may separately ask whether Drill Sergeant can bypass the private window picker and directly
+access screen and audio. Onboarding requests this before asking the user to open YouTube, rather
+than letting the first accountability check trigger an unexplained system dialog.
+
+After the initial Screen Recording permission works, persist `.directCapturePermission` and show:
+
+```
+One more permission: I need direct screen access so I can check your active window automatically without making you pick it every time. I take screenshots only — never audio — and keep them on this Mac. Click this bubble to grant it.
+```
+
+Nothing is requested until the user clicks the bubble. On click, persist
+`Settings.directCapturePermissionRequestPending` (`ds.directCapturePermissionRequestPending`),
+perform one normal `SCScreenshotManager` capture, and immediately discard the resulting screenshot.
+This asks for the direct-capture consent at the same API boundary used by real checks without
+running Ollama, writing a trace, or retaining the image. Drill Sergeant uses screenshot capture
+only and never configures ScreenCaptureKit audio capture; the operating-system dialog's mention of
+audio is generic to the broader direct-capture capability.
+
+If capture succeeds, clear the pending marker and advance to `.test`. If it fails, remain at
+`.directCapturePermission`, explain that access is still unavailable, and let the user click to
+retry after approving the app in System Settings. If macOS terminates the app during the request,
+the replacement process shows `Checking direct screen access…`, retries the explicitly initiated
+capture once, and advances on success. A failed resumed capture clears the marker before showing
+retry UI so a stale request cannot cause future ordinary quits to relaunch forever.
+`DS_RESET_ONBOARDING=1` clears both permission-request markers so a reset can never initiate either
+request without a fresh user click.
+
+## 28. Permission-quit relaunch ownership and verification
+
+The macOS permission UI can send Drill Sergeant a normal Quit AppleEvent when the user clicks
+`Quit & Reopen`; the operating system does not reliably start the replacement process. While
+either permission-request marker is true, `AppDelegate.applicationShouldTerminate` therefore asks
+`AppCoordinator` to schedule its own replacement before accepting an external quit.
+
+The replacement is launched by a detached helper. It waits until the current process ID no longer
+exists, then invokes `/usr/bin/open` on the installed bundle. Waiting avoids the LaunchServices
+race caused by attempting to open a second copy while the original app is still registered and
+terminating. Do not force a new instance: if macOS also honors `Quit & Reopen`, normal opening
+reuses that replacement instead of creating a duplicate. The helper gives up after 30 seconds
+rather than living indefinitely. If the helper
+cannot be started, cancel termination and keep the retry UI visible. Schedule at most one helper
+per process, and strip `DS_RESET_ONBOARDING` from its environment.
+
+An unresolved initial Screen Recording request retains
+`Settings.screenPermissionRequestPending`; a single failed poll is not proof of denial because the
+system sheet or System Settings may still be open. The marker is cleared only after capture works,
+after a replacement process exhausts its resume probes, on an explicit in-app quit, or on an
+onboarding reset. Apply the same rule to the direct-capture marker: a failed attempt presents retry
+UI but keeps relaunch protection active.
+
+Explicit `Quit Drill Sergeant` remains a real quit: it clears both pending markers and suppresses
+automatic relaunch. Logout, shutdown, restart, and Quit All AppleEvents also never schedule a
+replacement. The relaunch helper, external-quit policy, duplicate scheduling, launch failure,
+session-ending exclusions, explicit quit, unresolved consent, and both resume paths require
+automated coverage. Acceptance also requires an installed-app test that sends the same ordinary
+Quit AppleEvent and observes a different live process ID plus a second `App started` log record.
+
+## 29. Work hours
+
+Automatic monitoring is active only during configured local work hours. The default is Monday
+through Friday, 09:00 through 17:00. Store the setting under `ds.workHours`; onboarding resets do
+not clear it.
+
+The model has a fifth structured action:
+
+```swift
+enum Tool: String, Codable {
+    case set_idle, snooze, set_angry, save_user_preference, set_work_hours
+}
+
+enum Weekday: String, Codable, CaseIterable {
+    case monday, tuesday, wednesday, thursday, friday, saturday, sunday
+}
+
+struct WorkHours: Codable, Equatable {
+    static let standard: WorkHours  // weekdays, 09:00-17:00
+    static let always: WorkHours    // every day, 00:00-24:00
+    let days: [Weekday]
+    let startTime: String
+    let endTime: String
+}
+
+struct Decision: Codable, Equatable {
+    // Existing fields remain unchanged.
+    let workHours: WorkHours? // required when tool == .set_work_hours
+}
+```
+
+The JSON action is intentionally flat so a small model does not have to construct nested objects:
+
+```json
+{
+  "tool": "set_work_hours",
+  "days": ["monday", "tuesday", "wednesday", "thursday", "friday"],
+  "start_time": "09:00",
+  "end_time": "17:00",
+  "message": "Weekdays, nine to five. Got it."
+}
+```
+
+`days`, `start_time`, and `end_time` are all required for this action. Days are explicit lowercase
+enum values; times use local 24-hour `HH:mm`. `24:00` is accepted only as an end time. The array is
+the complete replacement schedule, not a patch. One contiguous window applies to all selected
+days. When the end is earlier than the start, the window continues overnight and each selected day
+names the day on which that window starts.
+
+Add this tool guidance to the system prompt:
+
+```
+set_work_hours(days, start_time, end_time): Replace the complete weekly schedule when the user asks
+to change when monitoring is active. List every active day using lowercase weekday names. Use local
+24-hour HH:mm times. Always send the full schedule, repeating unchanged values.
+```
+
+Call it only in direct response to a user's schedule request, never from a screenshot check.
+`CheckContext` gains `let workHours: WorkHours`, and both check and reply prompts include
+`Current work hours: Monday-Friday, 09:00-17:00 local time` so partial-change requests are safe.
+
+`Settings` gains `var workHours: WorkHours`. `Scheduler.init` gains
+`workHours: WorkHours = .standard` and `calendar: Calendar = .current`.
+
+Scheduling rules:
+
+- Automatic scheduled checks and angry polls run only inside the window. The end is exclusive.
+- If the next interval would land outside work hours, `nextCheckAt` becomes the next window's exact
+  start. Pre-roll never begins before a work window.
+- At the end of a window, an angry poll stops and the companion returns to idle until the next
+  window.
+- Manual checks, onboarding checks, and the angry follow-up they initiate bypass work hours; an
+  explicit user action should still work at night.
+- Applying `set_work_hours` persists the setting immediately. If the new schedule excludes the
+  current time, automatic monitoring returns to idle and waits for the next window.
