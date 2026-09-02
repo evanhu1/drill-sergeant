@@ -9,26 +9,26 @@ final class DevToolbar: NSPanel {
 
         super.init(
             contentRect: CGRect(x: 0, y: 0, width: 360, height: 860),
-            styleMask: [.utilityWindow, .titled, .closable],
+            styleMask: [.titled, .closable, .nonactivatingPanel],
             backing: .buffered,
             defer: false
         )
 
         title = "Drill Sergeant Developer"
-        level = .floating
-        isFloatingPanel = true
+        becomesKeyOnlyIfNeeded = true
         isReleasedWhenClosed = false
         hidesOnDeactivate = false
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         contentMinSize = CGSize(width: 360, height: 500)
         contentMaxSize = CGSize(width: 360, height: 1200)
         contentView = hostingView
+        level = .floating
         center()
     }
 
+    override var canBecomeKey: Bool { true }
+
     func show() {
-        NSApp.activate(ignoringOtherApps: true)
         orderFrontRegardless()
-        makeKey()
     }
 }
